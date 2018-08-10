@@ -22,6 +22,7 @@
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclBase.h"
 #include "clang/AST/DeclarationName.h"
+#include "clang/AST/Expr.h"
 #include "clang/AST/ExternalASTSource.h"
 #include "clang/AST/NestedNameSpecifier.h"
 #include "clang/AST/PrettyPrinter.h"
@@ -79,6 +80,7 @@ struct fltSemantics;
 
 namespace clang {
 
+class APFixedPoint;
 class APValue;
 class ASTMutationListener;
 class ASTRecordLayout;
@@ -92,6 +94,7 @@ class CXXMethodDecl;
 class CXXRecordDecl;
 class DiagnosticsEngine;
 class Expr;
+class FixedPointSemantics;
 class MangleContext;
 class MangleNumberingContext;
 class MaterializeTemporaryExpr;
@@ -148,6 +151,22 @@ struct TypeInfo {
 /// Holds long-lived AST nodes (such as types and decls) that can be
 /// referred to throughout the semantic analysis of a file.
 class ASTContext : public RefCountedBase<ASTContext> {
+public:
+  /// Copy initialization expr of a __block variable and a boolean flag that
+  /// indicates whether the expression can throw.
+  struct BlockVarCopyInit {
+    BlockVarCopyInit() = default;
+    BlockVarCopyInit(Expr *CopyExpr, bool CanThrow)
+        : ExprAndFlag(CopyExpr, CanThrow) {}
+    void setExprAndFlag(Expr *CopyExpr, bool CanThrow) {
+      ExprAndFlag.setPointerAndInt(CopyExpr, CanThrow);
+    }
+    Expr *getCopyExpr() const { return ExprAndFlag.getPointer(); }
+    bool canThrow() const { return ExprAndFlag.getInt(); }
+    llvm::PointerIntPair<Expr *, 1, bool> ExprAndFlag;
+  };
+
+private:
   friend class NestedNameSpecifier;
 
   mutable SmallVector<Type *, 0> Types;
@@ -226,6 +245,12 @@ class ASTContext : public RefCountedBase<ASTContext> {
   using TypeInfoMap = llvm::DenseMap<const Type *, struct TypeInfo>;
   mutable TypeInfoMap MemoizedTypeInfo;
 
+  /// A cache from types to unadjusted alignment information. Only ARM and
+  /// AArch64 targets need this information, keeping it separate prevents
+  /// imposing overhead on TypeInfo size.
+  using UnadjustedAlignMap = llvm::DenseMap<const Type *, unsigned>;
+  mutable UnadjustedAlignMap MemoizedUnadjustedAlign;
+
   /// A cache mapping from CXXRecordDecls to key functions.
   llvm::DenseMap<const CXXRecordDecl*, LazyDeclPtr> KeyFunctions;
 
@@ -236,8 +261,8 @@ class ASTContext : public RefCountedBase<ASTContext> {
   /// interface.
   llvm::DenseMap<const ObjCMethodDecl*,const ObjCMethodDecl*> ObjCMethodRedecls;
 
-  /// Mapping from __block VarDecls to their copy initialization expr.
-  llvm::DenseMap<const VarDecl*, Expr*> BlockVarCopyInits;
+  /// Mapping from __block VarDecls to BlockVarCopyInit.
+  llvm::DenseMap<const VarDecl *, BlockVarCopyInit> BlockVarCopyInits;
 
   /// Mapping from class scope functions specialization to their
   /// template patterns.
@@ -1522,7 +1547,7 @@ public:
   /// The sizeof operator requires this (C99 6.5.3.4p4).
   CanQualType getSizeType() const;
 
-  /// Return the unique signed counterpart of 
+  /// Return the unique signed counterpart of
   /// the integer type corresponding to size_t.
   CanQualType getSignedSizeType() const;
 
@@ -1955,6 +1980,9 @@ public:
 
   unsigned char getFixedPointScale(QualType Ty) const;
   unsigned char getFixedPointIBits(QualType Ty) const;
+  FixedPointSemantics getFixedPointSemantics(QualType Ty) const;
+  APFixedPoint getFixedPointMax(QualType Ty) const;
+  APFixedPoint getFixedPointMin(QualType Ty) const;
 
   DeclarationNameInfo getNameForTemplate(TemplateName Name,
                                          SourceLocation NameLoc) const;
@@ -2067,6 +2095,16 @@ public:
   unsigned getTypeAlign(QualType T) const { return getTypeInfo(T).Align; }
   unsigned getTypeAlign(const Type *T) const { return getTypeInfo(T).Align; }
 
+  /// Return the ABI-specified natural alignment of a (complete) type \p T,
+  /// before alignment adjustments, in bits.
+  ///
+  /// This alignment is curently used only by ARM and AArch64 when passing
+  /// arguments of a composite type.
+  unsigned getTypeUnadjustedAlign(QualType T) const {
+    return getTypeUnadjustedAlign(T.getTypePtr());
+  }
+  unsigned getTypeUnadjustedAlign(const Type *T) const;
+
   /// Return the ABI-specified alignment of a type, in bits, or 0 if
   /// the type is incomplete and we cannot determine the alignment (for
   /// example, from alignment attributes).
@@ -2076,6 +2114,12 @@ public:
   /// characters.
   CharUnits getTypeAlignInChars(QualType T) const;
   CharUnits getTypeAlignInChars(const Type *T) const;
+
+  /// getTypeUnadjustedAlignInChars - Return the ABI-specified alignment of a type,
+  /// in characters, before alignment adjustments. This method does not work on
+  /// incomplete types.
+  CharUnits getTypeUnadjustedAlignInChars(QualType T) const;
+  CharUnits getTypeUnadjustedAlignInChars(const Type *T) const;
 
   // getTypeInfoDataSizeInChars - Return the size of a type, in chars. If the
   // type is a record, its data size is returned.
@@ -2289,6 +2333,7 @@ public:
                            const ObjCMethodDecl *MethodImp);
 
   bool UnwrapSimilarTypes(QualType &T1, QualType &T2);
+  bool UnwrapSimilarArrayTypes(QualType &T1, QualType &T2);
 
   /// Determine if two types are similar, according to the C++ rules. That is,
   /// determine if they are the same other than qualifiers on the initial
@@ -2465,6 +2510,8 @@ public:
 
   unsigned getTargetAddressSpace(LangAS AS) const;
 
+  LangAS getLangASForBuiltinAddressSpace(unsigned AS) const;
+
   /// Get target-dependent integer value for null pointer which is used for
   /// constant folding.
   uint64_t getTargetNullPointerValue(QualType QT) const;
@@ -2634,12 +2681,13 @@ public:
   /// otherwise returns null.
   const ObjCInterfaceDecl *getObjContainingInterface(const NamedDecl *ND) const;
 
-  /// Set the copy inialization expression of a block var decl.
-  void setBlockVarCopyInits(VarDecl*VD, Expr* Init);
+  /// Set the copy inialization expression of a block var decl. \p CanThrow
+  /// indicates whether the copy expression can throw or not.
+  void setBlockVarCopyInit(const VarDecl* VD, Expr *CopyExpr, bool CanThrow);
 
   /// Get the copy initialization expression of the VarDecl \p VD, or
   /// nullptr if none exists.
-  Expr *getBlockVarCopyInits(const VarDecl* VD);
+  BlockVarCopyInit getBlockVarCopyInit(const VarDecl* VD) const;
 
   /// Allocate an uninitialized TypeSourceInfo.
   ///

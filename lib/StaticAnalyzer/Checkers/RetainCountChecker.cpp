@@ -2526,7 +2526,7 @@ void CFRefLeakReport::createDescription(CheckerContext &Ctx, bool GCEnabled,
   if (RegionDescription) {
     os << " stored into '" << *RegionDescription << '\'';
     if (IncludeAllocationLine) {
-      FullSourceLoc SL(AllocStmt->getLocStart(), Ctx.getSourceManager());
+      FullSourceLoc SL(AllocStmt->getBeginLoc(), Ctx.getSourceManager());
       os << " (allocated on line " << SL.getSpellingLineNumber() << ")";
     }
   }
@@ -4000,7 +4000,7 @@ void RetainCountChecker::checkEndFunction(const ReturnStmt *RS,
   // Don't process anything within synthesized bodies.
   const LocationContext *LCtx = Pred->getLocationContext();
   if (LCtx->getAnalysisDeclContext()->isBodyAutosynthesized()) {
-    assert(!LCtx->inTopFrame()); 
+    assert(!LCtx->inTopFrame());
     return;
   }
 
