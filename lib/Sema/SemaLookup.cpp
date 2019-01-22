@@ -1,9 +1,8 @@
 //===--------------------- SemaLookup.cpp - Name Lookup  ------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -186,9 +185,7 @@ namespace {
       list.push_back(UnqualUsingEntry(UD->getNominatedNamespace(), Common));
     }
 
-    void done() {
-      llvm::sort(list.begin(), list.end(), UnqualUsingEntry::Comparator());
-    }
+    void done() { llvm::sort(list, UnqualUsingEntry::Comparator()); }
 
     typedef ListTy::const_iterator const_iterator;
 
@@ -1392,23 +1389,25 @@ llvm::DenseSet<Module*> &Sema::getLookupModules() {
   return LookupModulesCache;
 }
 
+/// Determine whether the module M is part of the current module from the
+/// perspective of a module-private visibility check.
+static bool isInCurrentModule(const Module *M, const LangOptions &LangOpts) {
+  // If M is the global module fragment of a module that we've not yet finished
+  // parsing, then it must be part of the current module.
+  return M->getTopLevelModuleName() == LangOpts.CurrentModule ||
+         (M->Kind == Module::GlobalModuleFragment && !M->Parent);
+}
+
 bool Sema::hasVisibleMergedDefinition(NamedDecl *Def) {
-  for (Module *Merged : Context.getModulesWithMergedDefinition(Def))
+  for (const Module *Merged : Context.getModulesWithMergedDefinition(Def))
     if (isModuleVisible(Merged))
       return true;
   return false;
 }
 
 bool Sema::hasMergedDefinitionInCurrentModule(NamedDecl *Def) {
-  // FIXME: When not in local visibility mode, we can't tell the difference
-  // between a declaration being visible because we merged a local copy of
-  // the same declaration into it, and it being visible because its owning
-  // module is visible.
-  if (Def->getModuleOwnershipKind() == Decl::ModuleOwnershipKind::Visible &&
-      getLangOpts().ModulesLocalVisibility)
-    return true;
-  for (Module *Merged : Context.getModulesWithMergedDefinition(Def))
-    if (Merged->getTopLevelModuleName() == getLangOpts().CurrentModule)
+  for (const Module *Merged : Context.getModulesWithMergedDefinition(Def))
+    if (isInCurrentModule(Merged, getLangOpts()))
       return true;
   return false;
 }
@@ -1428,8 +1427,6 @@ hasVisibleDefaultArgument(Sema &S, const ParmDecl *D,
     if (!DefaultArg.isInherited() && Modules) {
       auto *NonConstD = const_cast<ParmDecl*>(D);
       Modules->push_back(S.getOwningModule(NonConstD));
-      const auto &Merged = S.Context.getModulesWithMergedDefinition(NonConstD);
-      Modules->insert(Modules->end(), Merged.begin(), Merged.end());
     }
 
     // If there was a previous default argument, maybe its parameter is visible.
@@ -1464,11 +1461,8 @@ static bool hasVisibleDeclarationImpl(Sema &S, const NamedDecl *D,
 
     HasFilteredRedecls = true;
 
-    if (Modules) {
+    if (Modules)
       Modules->push_back(R->getOwningModule());
-      const auto &Merged = S.Context.getModulesWithMergedDefinition(R);
-      Modules->insert(Modules->end(), Merged.begin(), Merged.end());
-    }
   }
 
   // Only return false if there is at least one redecl that is not filtered out.
@@ -1519,27 +1513,11 @@ bool LookupResult::isVisibleSlow(Sema &SemaRef, NamedDecl *D) {
   assert(D->isHidden() && "should not call this: not in slow case");
 
   Module *DeclModule = SemaRef.getOwningModule(D);
-  if (!DeclModule) {
-    // A module-private declaration with no owning module means this is in the
-    // global module in the C++ Modules TS. This is visible within the same
-    // translation unit only.
-    // FIXME: Don't assume that "same translation unit" means the same thing
-    // as "not from an AST file".
-    assert(D->isModulePrivate() && "hidden decl has no module");
-    if (!D->isFromASTFile() || SemaRef.hasMergedDefinitionInCurrentModule(D))
-      return true;
-  } else {
-    // If the owning module is visible, and the decl is not module private,
-    // then the decl is visible too. (Module private is ignored within the same
-    // top-level module.)
-    if (D->isModulePrivate()
-          ? DeclModule->getTopLevelModuleName() ==
-                    SemaRef.getLangOpts().CurrentModule ||
-            SemaRef.hasMergedDefinitionInCurrentModule(D)
-          : SemaRef.isModuleVisible(DeclModule) ||
-            SemaRef.hasVisibleMergedDefinition(D))
-      return true;
-  }
+  assert(DeclModule && "hidden decl has no owning module");
+
+  // If the owning module is visible, the decl is visible.
+  if (SemaRef.isModuleVisible(DeclModule, D->isModulePrivate()))
+    return true;
 
   // Determine whether a decl context is a file context for the purpose of
   // visibility. This looks through some (export and linkage spec) transparent
@@ -1589,29 +1567,41 @@ bool LookupResult::isVisibleSlow(Sema &SemaRef, NamedDecl *D) {
     return VisibleWithinParent;
   }
 
-  // FIXME: All uses of DeclModule below this point should also check merged
-  // modules.
-  if (!DeclModule)
-    return false;
+  return false;
+}
+
+bool Sema::isModuleVisible(const Module *M, bool ModulePrivate) {
+  // The module might be ordinarily visible. For a module-private query, that
+  // means it is part of the current module. For any other query, that means it
+  // is in our visible module set.
+  if (ModulePrivate) {
+    if (isInCurrentModule(M, getLangOpts()))
+      return true;
+  } else {
+    if (VisibleModules.isVisible(M))
+      return true;
+  }
+
+  // Otherwise, it might be visible by virtue of the query being within a
+  // template instantiation or similar that is permitted to look inside M.
 
   // Find the extra places where we need to look.
-  const auto &LookupModules = SemaRef.getLookupModules();
+  const auto &LookupModules = getLookupModules();
   if (LookupModules.empty())
     return false;
 
-  // If our lookup set contains the decl's module, it's visible.
-  if (LookupModules.count(DeclModule))
+  // If our lookup set contains the module, it's visible.
+  if (LookupModules.count(M))
     return true;
 
-  // If the declaration isn't exported, it's not visible in any other module.
-  if (D->isModulePrivate())
+  // For a module-private query, that's everywhere we get to look.
+  if (ModulePrivate)
     return false;
 
-  // Check whether DeclModule is transitively exported to an import of
-  // the lookup set.
-  return std::any_of(LookupModules.begin(), LookupModules.end(),
-                     [&](const Module *M) {
-                       return M->isModuleVisible(DeclModule); });
+  // Check whether M is transitively exported to an import of the lookup set.
+  return llvm::any_of(LookupModules, [&](const Module *LookupM) {
+    return LookupM->isModuleVisible(M);
+  });
 }
 
 bool Sema::isVisibleSlow(const NamedDecl *D) {
@@ -2426,10 +2416,18 @@ namespace {
         InstantiationLoc(InstantiationLoc) {
     }
 
+    bool addClassTransitive(CXXRecordDecl *RD) {
+      Classes.insert(RD);
+      return ClassesTransitive.insert(RD);
+    }
+
     Sema &S;
     Sema::AssociatedNamespaceSet &Namespaces;
     Sema::AssociatedClassSet &Classes;
     SourceLocation InstantiationLoc;
+
+  private:
+    Sema::AssociatedClassSet ClassesTransitive;
   };
 } // end anonymous namespace
 
@@ -2530,15 +2528,6 @@ addAssociatedClassesAndNamespaces(AssociatedLookup &Result,
   // Add the associated namespace for this class.
   CollectEnclosingNamespace(Result.Namespaces, Ctx);
 
-  // Add the class itself. If we've already seen this class, we don't
-  // need to visit base classes.
-  //
-  // FIXME: That's not correct, we may have added this class only because it
-  // was the enclosing class of another class, and in that case we won't have
-  // added its base classes yet.
-  if (!Result.Classes.insert(Class))
-    return;
-
   // -- If T is a template-id, its associated namespaces and classes are
   //    the namespace in which the template is defined; for member
   //    templates, the member template's class; the namespaces and classes
@@ -2560,6 +2549,11 @@ addAssociatedClassesAndNamespaces(AssociatedLookup &Result,
     for (unsigned I = 0, N = TemplateArgs.size(); I != N; ++I)
       addAssociatedClassesAndNamespaces(Result, TemplateArgs[I]);
   }
+
+  // Add the class itself. If we've already transitively visited this class,
+  // we don't need to visit base classes.
+  if (!Result.addClassTransitive(Class))
+    return;
 
   // Only recurse into base classes for complete types.
   if (!Result.S.isCompleteType(Result.InstantiationLoc,
@@ -2586,7 +2580,7 @@ addAssociatedClassesAndNamespaces(AssociatedLookup &Result,
       if (!BaseType)
         continue;
       CXXRecordDecl *BaseDecl = cast<CXXRecordDecl>(BaseType->getDecl());
-      if (Result.Classes.insert(BaseDecl)) {
+      if (Result.addClassTransitive(BaseDecl)) {
         // Find the associated namespace for this base class.
         DeclContext *BaseCtx = BaseDecl->getDeclContext();
         CollectEnclosingNamespace(Result.Namespaces, BaseCtx);
@@ -2802,15 +2796,9 @@ void Sema::FindAssociatedClassesAndNamespaces(
     // in which the function or function template is defined and the
     // classes and namespaces associated with its (non-dependent)
     // parameter types and return type.
-    Arg = Arg->IgnoreParens();
-    if (UnaryOperator *unaryOp = dyn_cast<UnaryOperator>(Arg))
-      if (unaryOp->getOpcode() == UO_AddrOf)
-        Arg = unaryOp->getSubExpr();
+    OverloadExpr *OE = OverloadExpr::find(Arg).Expression;
 
-    UnresolvedLookupExpr *ULE = dyn_cast<UnresolvedLookupExpr>(Arg);
-    if (!ULE) continue;
-
-    for (const auto *D : ULE->decls()) {
+    for (const NamedDecl *D : OE->decls()) {
       // Look through any using declarations to find the underlying function.
       const FunctionDecl *FDecl = D->getUnderlyingDecl()->getAsFunction();
 
@@ -3346,38 +3334,29 @@ void Sema::ArgumentDependentLookup(DeclarationName Name, SourceLocation Loc,
           !isa<FunctionTemplateDecl>(Underlying))
         continue;
 
-      if (!isVisible(D)) {
-        D = findAcceptableDecl(
-            *this, D, (Decl::IDNS_Ordinary | Decl::IDNS_OrdinaryFriend));
-        if (!D)
-          continue;
-        if (auto *USD = dyn_cast<UsingShadowDecl>(D))
-          Underlying = USD->getTargetDecl();
-      }
-
-      // If the only declaration here is an ordinary friend, consider
-      // it only if it was declared in an associated classes.
-      if ((D->getIdentifierNamespace() & Decl::IDNS_Ordinary) == 0) {
-        // If it's neither ordinarily visible nor a friend, we can't find it.
-        if ((D->getIdentifierNamespace() & Decl::IDNS_OrdinaryFriend) == 0)
-          continue;
-
-        bool DeclaredInAssociatedClass = false;
-        for (Decl *DI = D; DI; DI = DI->getPreviousDecl()) {
-          DeclContext *LexDC = DI->getLexicalDeclContext();
-          if (isa<CXXRecordDecl>(LexDC) &&
-              AssociatedClasses.count(cast<CXXRecordDecl>(LexDC)) &&
-              isVisible(cast<NamedDecl>(DI))) {
-            DeclaredInAssociatedClass = true;
+      // The declaration is visible to argument-dependent lookup if either
+      // it's ordinarily visible or declared as a friend in an associated
+      // class.
+      bool Visible = false;
+      for (D = D->getMostRecentDecl(); D;
+           D = cast_or_null<NamedDecl>(D->getPreviousDecl())) {
+        if (D->getIdentifierNamespace() & Decl::IDNS_Ordinary) {
+          if (isVisible(D)) {
+            Visible = true;
+            break;
+          }
+        } else if (D->getFriendObjectKind()) {
+          auto *RD = cast<CXXRecordDecl>(D->getLexicalDeclContext());
+          if (AssociatedClasses.count(RD) && isVisible(D)) {
+            Visible = true;
             break;
           }
         }
-        if (!DeclaredInAssociatedClass)
-          continue;
       }
 
       // FIXME: Preserve D as the FoundDecl.
-      Result.insert(Underlying);
+      if (Visible)
+        Result.insert(Underlying);
     }
   }
 }
@@ -3628,8 +3607,9 @@ static void LookupVisibleDecls(DeclContext *Ctx, LookupResult &Result,
 
       // Find results in this base class (and its bases).
       ShadowContextRAII Shadow(Visited);
-      LookupVisibleDecls(RD, Result, QualifiedNameLookup, true, Consumer,
-                         Visited, IncludeDependentBases, LoadExternal);
+      LookupVisibleDecls(RD, Result, QualifiedNameLookup, /*InBaseClass=*/true,
+                         Consumer, Visited, IncludeDependentBases,
+                         LoadExternal);
     }
   }
 
@@ -3998,9 +3978,9 @@ void TypoCorrectionConsumer::addName(StringRef Name, NamedDecl *ND,
 
   // Compute an upper bound on the allowable edit distance, so that the
   // edit-distance algorithm can short-circuit.
-  unsigned UpperBound = (TypoStr.size() + 2) / 3 + 1;
+  unsigned UpperBound = (TypoStr.size() + 2) / 3;
   unsigned ED = TypoStr.edit_distance(Name, true, UpperBound);
-  if (ED >= UpperBound) return;
+  if (ED > UpperBound) return;
 
   TypoCorrection TC(&SemaRef.Context.Idents.get(Name), ND, NNS, ED);
   if (isKeyword) TC.makeKeyword();
@@ -4070,7 +4050,7 @@ void TypoCorrectionConsumer::addNamespaces(
   }
   // Do not transform this into an iterator-based loop. The loop body can
   // trigger the creation of further types (through lazy deserialization) and
-  // invalide iterators into this list.
+  // invalid iterators into this list.
   auto &Types = SemaRef.getASTContext().getTypes();
   for (unsigned I = 0; I != Types.size(); ++I) {
     const auto *TI = Types[I];
@@ -4211,7 +4191,7 @@ void TypoCorrectionConsumer::performQualifiedLookups() {
           SS->getScopeRep()->print(OldOStream, SemaRef.getPrintingPolicy());
           OldOStream << Typo->getName();
           // If correction candidate would be an identical written qualified
-          // identifer, then the existing CXXScopeSpec probably included a
+          // identifier, then the existing CXXScopeSpec probably included a
           // typedef that didn't get accounted for properly.
           if (OldOStream.str() == NewQualified)
             break;
@@ -5061,12 +5041,12 @@ void Sema::diagnoseMissingImport(SourceLocation Loc, NamedDecl *Decl,
   if (!Def)
     Def = Decl;
 
-  Module *Owner = getOwningModule(Decl);
+  Module *Owner = getOwningModule(Def);
   assert(Owner && "definition of hidden declaration is not in a module");
 
   llvm::SmallVector<Module*, 8> OwningModules;
   OwningModules.push_back(Owner);
-  auto Merged = Context.getModulesWithMergedDefinition(Decl);
+  auto Merged = Context.getModulesWithMergedDefinition(Def);
   OwningModules.insert(OwningModules.end(), Merged.begin(), Merged.end());
 
   diagnoseMissingImport(Loc, Decl, Decl->getLocation(), OwningModules, MIK,

@@ -1,9 +1,8 @@
 //===- ExprObjC.h - Classes for representing ObjC expressions ---*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -67,15 +66,7 @@ public:
   SourceLocation getAtLoc() const { return AtLoc; }
   void setAtLoc(SourceLocation L) { AtLoc = L; }
 
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocStart() const LLVM_READONLY,
-                            "Use getBeginLoc instead") {
-    return getBeginLoc();
-  }
   SourceLocation getBeginLoc() const LLVM_READONLY { return AtLoc; }
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocEnd() const LLVM_READONLY,
-                            "Use getEndLoc instead") {
-    return getEndLoc();
-  }
   SourceLocation getEndLoc() const LLVM_READONLY { return String->getEndLoc(); }
 
   // Iterators
@@ -102,15 +93,7 @@ public:
   bool getValue() const { return Value; }
   void setValue(bool V) { Value = V; }
 
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocStart() const LLVM_READONLY,
-                            "Use getBeginLoc instead") {
-    return getBeginLoc();
-  }
   SourceLocation getBeginLoc() const LLVM_READONLY { return Loc; }
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocEnd() const LLVM_READONLY,
-                            "Use getEndLoc instead") {
-    return getEndLoc();
-  }
   SourceLocation getEndLoc() const LLVM_READONLY { return Loc; }
 
   SourceLocation getLocation() const { return Loc; }
@@ -157,15 +140,7 @@ public:
 
   SourceLocation getAtLoc() const { return Range.getBegin(); }
 
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocStart() const LLVM_READONLY,
-                            "Use getBeginLoc instead") {
-    return getBeginLoc();
-  }
   SourceLocation getBeginLoc() const LLVM_READONLY { return Range.getBegin(); }
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocEnd() const LLVM_READONLY,
-                            "Use getEndLoc instead") {
-    return getEndLoc();
-  }
   SourceLocation getEndLoc() const LLVM_READONLY { return Range.getEnd(); }
 
   SourceRange getSourceRange() const LLVM_READONLY {
@@ -218,15 +193,7 @@ public:
   static ObjCArrayLiteral *CreateEmpty(const ASTContext &C,
                                        unsigned NumElements);
 
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocStart() const LLVM_READONLY,
-                            "Use getBeginLoc instead") {
-    return getBeginLoc();
-  }
   SourceLocation getBeginLoc() const LLVM_READONLY { return Range.getBegin(); }
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocEnd() const LLVM_READONLY,
-                            "Use getEndLoc instead") {
-    return getEndLoc();
-  }
   SourceLocation getEndLoc() const LLVM_READONLY { return Range.getEnd(); }
   SourceRange getSourceRange() const LLVM_READONLY { return Range; }
 
@@ -287,12 +254,6 @@ struct ObjCDictionaryElement {
 };
 
 } // namespace clang
-
-namespace llvm {
-
-template <> struct isPodLike<clang::ObjCDictionaryElement> : std::true_type {};
-
-} // namespace llvm
 
 namespace clang {
 
@@ -391,15 +352,7 @@ public:
     return DictWithObjectsMethod;
   }
 
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocStart() const LLVM_READONLY,
-                            "Use getBeginLoc instead") {
-    return getBeginLoc();
-  }
   SourceLocation getBeginLoc() const LLVM_READONLY { return Range.getBegin(); }
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocEnd() const LLVM_READONLY,
-                            "Use getEndLoc instead") {
-    return getEndLoc();
-  }
   SourceLocation getEndLoc() const LLVM_READONLY { return Range.getEnd(); }
   SourceRange getSourceRange() const LLVM_READONLY { return Range; }
 
@@ -452,15 +405,7 @@ public:
     EncodedType = EncType;
   }
 
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocStart() const LLVM_READONLY,
-                            "Use getBeginLoc instead") {
-    return getBeginLoc();
-  }
   SourceLocation getBeginLoc() const LLVM_READONLY { return AtLoc; }
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocEnd() const LLVM_READONLY,
-                            "Use getEndLoc instead") {
-    return getEndLoc();
-  }
   SourceLocation getEndLoc() const LLVM_READONLY { return RParenLoc; }
 
   // Iterators
@@ -495,15 +440,7 @@ public:
   void setAtLoc(SourceLocation L) { AtLoc = L; }
   void setRParenLoc(SourceLocation L) { RParenLoc = L; }
 
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocStart() const LLVM_READONLY,
-                            "Use getBeginLoc instead") {
-    return getBeginLoc();
-  }
   SourceLocation getBeginLoc() const LLVM_READONLY { return AtLoc; }
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocEnd() const LLVM_READONLY,
-                            "Use getEndLoc instead") {
-    return getEndLoc();
-  }
   SourceLocation getEndLoc() const LLVM_READONLY { return RParenLoc; }
 
   /// getNumArgs - Return the number of actual arguments to this call.
@@ -552,15 +489,7 @@ public:
   void setAtLoc(SourceLocation L) { AtLoc = L; }
   void setRParenLoc(SourceLocation L) { RParenLoc = L; }
 
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocStart() const LLVM_READONLY,
-                            "Use getBeginLoc instead") {
-    return getBeginLoc();
-  }
   SourceLocation getBeginLoc() const LLVM_READONLY { return AtLoc; }
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocEnd() const LLVM_READONLY,
-                            "Use getEndLoc instead") {
-    return getEndLoc();
-  }
   SourceLocation getEndLoc() const LLVM_READONLY { return RParenLoc; }
 
   // Iterators
@@ -620,16 +549,8 @@ public:
   SourceLocation getLocation() const { return Loc; }
   void setLocation(SourceLocation L) { Loc = L; }
 
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocStart() const LLVM_READONLY,
-                            "Use getBeginLoc instead") {
-    return getBeginLoc();
-  }
   SourceLocation getBeginLoc() const LLVM_READONLY {
     return isFreeIvar() ? Loc : getBase()->getBeginLoc();
-  }
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocEnd() const LLVM_READONLY,
-                            "Use getEndLoc instead") {
-    return getEndLoc();
   }
   SourceLocation getEndLoc() const LLVM_READONLY { return Loc; }
 
@@ -814,19 +735,11 @@ public:
   /// Determine the type of the base, regardless of the kind of receiver.
   QualType getReceiverType(const ASTContext &ctx) const;
 
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocStart() const LLVM_READONLY,
-                            "Use getBeginLoc instead") {
-    return getBeginLoc();
-  }
   SourceLocation getBeginLoc() const LLVM_READONLY {
     return isObjectReceiver() ? getBase()->getBeginLoc()
                               : getReceiverLocation();
   }
 
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocEnd() const LLVM_READONLY,
-                            "Use getEndLoc instead") {
-    return getEndLoc();
-  }
   SourceLocation getEndLoc() const LLVM_READONLY { return IdLoc; }
 
   // Iterators
@@ -919,18 +832,10 @@ public:
   SourceLocation getRBracket() const { return RBracket; }
   void setRBracket(SourceLocation RB) { RBracket = RB; }
 
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocStart() const LLVM_READONLY,
-                            "Use getBeginLoc instead") {
-    return getBeginLoc();
-  }
   SourceLocation getBeginLoc() const LLVM_READONLY {
     return SubExprs[BASE]->getBeginLoc();
   }
 
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocEnd() const LLVM_READONLY,
-                            "Use getEndLoc instead") {
-    return getEndLoc();
-  }
   SourceLocation getEndLoc() const LLVM_READONLY { return RBracket; }
 
   Expr *getBaseExpr() const { return cast<Expr>(SubExprs[BASE]); }
@@ -1484,15 +1389,7 @@ public:
     RBracLoc = R.getEnd();
   }
 
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocStart() const LLVM_READONLY,
-                            "Use getBeginLoc instead") {
-    return getBeginLoc();
-  }
   SourceLocation getBeginLoc() const LLVM_READONLY { return LBracLoc; }
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocEnd() const LLVM_READONLY,
-                            "Use getEndLoc instead") {
-    return getEndLoc();
-  }
   SourceLocation getEndLoc() const LLVM_READONLY { return RBracLoc; }
 
   // Iterators
@@ -1569,10 +1466,6 @@ public:
   SourceLocation getOpLoc() const { return OpLoc; }
   void setOpLoc(SourceLocation L) { OpLoc = L; }
 
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocStart() const LLVM_READONLY,
-                            "Use getBeginLoc instead") {
-    return getBeginLoc();
-  }
   SourceLocation getBeginLoc() const LLVM_READONLY {
     return getBase()->getBeginLoc();
   }
@@ -1581,10 +1474,6 @@ public:
     return getBase()->getEndLoc();
   }
 
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocEnd() const LLVM_READONLY,
-                            "Use getEndLoc instead") {
-    return getEndLoc();
-  }
   SourceLocation getEndLoc() const LLVM_READONLY { return IsaMemberLoc; }
 
   SourceLocation getExprLoc() const LLVM_READONLY { return IsaMemberLoc; }
@@ -1654,16 +1543,8 @@ public:
   child_range children() { return child_range(&Operand, &Operand+1); }
 
   // Source locations are determined by the subexpression.
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocStart() const LLVM_READONLY,
-                            "Use getBeginLoc instead") {
-    return getBeginLoc();
-  }
   SourceLocation getBeginLoc() const LLVM_READONLY {
     return Operand->getBeginLoc();
-  }
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocEnd() const LLVM_READONLY,
-                            "Use getEndLoc instead") {
-    return getEndLoc();
   }
   SourceLocation getEndLoc() const LLVM_READONLY {
     return Operand->getEndLoc();
@@ -1686,8 +1567,7 @@ public:
 /// \endcode
 class ObjCBridgedCastExpr final
     : public ExplicitCastExpr,
-      private llvm::TrailingObjects<
-          ObjCBridgedCastExpr, CastExpr::BasePathSizeTy, CXXBaseSpecifier *> {
+      private llvm::TrailingObjects<ObjCBridgedCastExpr, CXXBaseSpecifier *> {
   friend class ASTStmtReader;
   friend class ASTStmtWriter;
   friend class CastExpr;
@@ -1696,10 +1576,6 @@ class ObjCBridgedCastExpr final
   SourceLocation LParenLoc;
   SourceLocation BridgeKeywordLoc;
   unsigned Kind : 2;
-
-  size_t numTrailingObjects(OverloadToken<CastExpr::BasePathSizeTy>) const {
-    return path_empty() ? 0 : 1;
-  }
 
 public:
   ObjCBridgedCastExpr(SourceLocation LParenLoc, ObjCBridgeCastKind Kind,
@@ -1726,16 +1602,8 @@ public:
   /// The location of the bridge keyword.
   SourceLocation getBridgeKeywordLoc() const { return BridgeKeywordLoc; }
 
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocStart() const LLVM_READONLY,
-                            "Use getBeginLoc instead") {
-    return getBeginLoc();
-  }
   SourceLocation getBeginLoc() const LLVM_READONLY { return LParenLoc; }
 
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocEnd() const LLVM_READONLY,
-                            "Use getEndLoc instead") {
-    return getEndLoc();
-  }
   SourceLocation getEndLoc() const LLVM_READONLY {
     return getSubExpr()->getEndLoc();
   }
@@ -1774,15 +1642,7 @@ public:
   explicit ObjCAvailabilityCheckExpr(EmptyShell Shell)
       : Expr(ObjCAvailabilityCheckExprClass, Shell) {}
 
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocStart() const LLVM_READONLY,
-                            "Use getBeginLoc instead") {
-    return getBeginLoc();
-  }
   SourceLocation getBeginLoc() const { return AtLoc; }
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocEnd() const LLVM_READONLY,
-                            "Use getEndLoc instead") {
-    return getEndLoc();
-  }
   SourceLocation getEndLoc() const { return RParen; }
   SourceRange getSourceRange() const { return {AtLoc, RParen}; }
 

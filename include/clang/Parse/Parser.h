@@ -1,9 +1,8 @@
 //===--- Parser.h - C Language Parser ---------------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -14,6 +13,7 @@
 #ifndef LLVM_CLANG_PARSE_PARSER_H
 #define LLVM_CLANG_PARSE_PARSER_H
 
+#include "clang/AST/OpenMPClause.h"
 #include "clang/AST/Availability.h"
 #include "clang/Basic/BitmaskEnum.h"
 #include "clang/Basic/OpenMPKinds.h"
@@ -22,7 +22,6 @@
 #include "clang/Lex/CodeCompletionHandler.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Sema/DeclSpec.h"
-#include "clang/Sema/LoopHint.h"
 #include "clang/Sema/Sema.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Compiler.h"
@@ -38,6 +37,7 @@ namespace clang {
   class CorrectionCandidateCallback;
   class DeclGroupRef;
   class DiagnosticBuilder;
+  struct LoopHint;
   class Parser;
   class ParsingDeclRAIIObject;
   class ParsingDeclSpec;
@@ -119,7 +119,7 @@ class Parser : public CodeCompletionHandler {
   IdentifierInfo *Ident_pixel;
 
   /// Objective-C contextual keywords.
-  mutable IdentifierInfo *Ident_instancetype;
+  IdentifierInfo *Ident_instancetype;
 
   /// Identifier for "introduced".
   IdentifierInfo *Ident_introduced;
@@ -213,6 +213,11 @@ class Parser : public CodeCompletionHandler {
   /// This is managed by the \c InMessageExpressionRAIIObject class, and
   /// should not be set directly.
   bool InMessageExpression;
+
+  /// Gets set to true after calling ProduceSignatureHelp, it is for a
+  /// workaround to make sure ProduceSignatureHelp is only called at the deepest
+  /// function call.
+  bool CalledSignatureHelp = false;
 
   /// The "depth" of the template parameters currently being parsed.
   unsigned TemplateParameterDepth;
@@ -353,6 +358,11 @@ class Parser : public CodeCompletionHandler {
   /// Used to determine if an expression that is being parsed is a statement or
   /// just a regular sub-expression.
   SourceLocation ExprStatementTokLoc;
+
+  /// Tests whether an expression value is discarded based on token lookahead.
+  /// It will return true if the lexer is currently processing the })
+  /// terminating a GNU statement expression and false otherwise.
+  bool isExprValueDiscarded();
 
 public:
   Parser(Preprocessor &PP, Sema &Actions, bool SkipFunctionBodies);
@@ -670,6 +680,10 @@ private:
   void HandlePragmaFPContract();
 
   /// Handle the annotation token produced for
+  /// #pragma STDC FENV_ACCESS...
+  void HandlePragmaFEnvAccess();
+
+  /// \brief Handle the annotation token produced for
   /// #pragma clang fp ...
   void HandlePragmaFP();
 
@@ -795,7 +809,7 @@ private:
   ///
   /// Should only be used in Objective-C language modes.
   bool isObjCInstancetype() {
-    assert(getLangOpts().ObjC1);
+    assert(getLangOpts().ObjC);
     if (Tok.isAnnotation())
       return false;
     if (!Ident_instancetype)
@@ -1784,10 +1798,12 @@ private:
                                             SourceLocation Start);
 
   //===--------------------------------------------------------------------===//
-  // C++ if/switch/while condition expression.
+  // C++ if/switch/while/for condition expression.
+  struct ForRangeInfo;
   Sema::ConditionResult ParseCXXCondition(StmtResult *InitStmt,
                                           SourceLocation Loc,
-                                          Sema::ConditionKind CK);
+                                          Sema::ConditionKind CK,
+                                          ForRangeInfo *FRI = nullptr);
 
   //===--------------------------------------------------------------------===//
   // C++ Coroutines
@@ -1877,6 +1893,7 @@ private:
   StmtResult ParseCompoundStatement(bool isStmtExpr,
                                     unsigned ScopeFlags);
   void ParseCompoundStatementLeadingPragmas();
+  bool ConsumeNullStmt(StmtVector &Stmts);
   StmtResult ParseCompoundStatementBody(bool isStmtExpr = false);
   bool ParseParenExprOrCondition(StmtResult *InitStmt,
                                  Sema::ConditionResult &CondResult,
@@ -2036,6 +2053,9 @@ private:
 
     bool ParsedForRangeDecl() { return !ColonLoc.isInvalid(); }
   };
+  struct ForRangeInfo : ForRangeInit {
+    StmtResult LoopVar;
+  };
 
   DeclGroupPtrTy ParseDeclaration(DeclaratorContext Context,
                                   SourceLocation &DeclEnd,
@@ -2130,6 +2150,8 @@ private:
   // 'for-init-statement' part of a 'for' statement.
   /// Returns true for declaration, false for expression.
   bool isForInitDeclaration() {
+    if (getLangOpts().OpenMP)
+      Actions.startOpenMPLoop();
     if (getLangOpts().CPlusPlus)
       return isCXXSimpleDeclaration(/*AllowForRangeDecl=*/true);
     return isDeclarationSpecifier(true);
@@ -2206,13 +2228,15 @@ private:
     Expression,    ///< Disambiguated as an expression (either kind).
     ConditionDecl, ///< Disambiguated as the declaration form of condition.
     InitStmtDecl,  ///< Disambiguated as a simple-declaration init-statement.
+    ForRangeDecl,  ///< Disambiguated as a for-range declaration.
     Error          ///< Can't be any of the above!
   };
   /// Disambiguates between the different kinds of things that can happen
   /// after 'if (' or 'switch ('. This could be one of two different kinds of
   /// declaration (depending on whether there is a ';' later) or an expression.
   ConditionOrInitStatement
-  isCXXConditionDeclarationOrInitStatement(bool CanBeInitStmt);
+  isCXXConditionDeclarationOrInitStatement(bool CanBeInitStmt,
+                                           bool CanBeForRangeDecl);
 
   bool isCXXTypeId(TentativeCXXTypeIdContext Context, bool &isAmbiguous);
   bool isCXXTypeId(TentativeCXXTypeIdContext Context) {
@@ -2641,9 +2665,16 @@ private:
   DeclGroupPtrTy ParseNamespace(DeclaratorContext Context,
                                 SourceLocation &DeclEnd,
                                 SourceLocation InlineLoc = SourceLocation());
-  void ParseInnerNamespace(std::vector<SourceLocation> &IdentLoc,
-                           std::vector<IdentifierInfo *> &Ident,
-                           std::vector<SourceLocation> &NamespaceLoc,
+
+  struct InnerNamespaceInfo {
+    SourceLocation NamespaceLoc;
+    SourceLocation InlineLoc;
+    SourceLocation IdentLoc;
+    IdentifierInfo *Ident;
+  };
+  using InnerNamespaceInfoList = llvm::SmallVector<InnerNamespaceInfo, 4>;
+
+  void ParseInnerNamespace(const InnerNamespaceInfoList &InnerNSs,
                            unsigned int index, SourceLocation &InlineLoc,
                            ParsedAttributes &attrs,
                            BalancedDelimiterTracker &Tracker);
@@ -2749,6 +2780,11 @@ private:
   DeclGroupPtrTy ParseOMPDeclareSimdClauses(DeclGroupPtrTy Ptr,
                                             CachedTokens &Toks,
                                             SourceLocation Loc);
+  /// Parse clauses for '#pragma omp declare target'.
+  DeclGroupPtrTy ParseOMPDeclareTargetClauses();
+  /// Parse '#pragma omp end declare target'.
+  void ParseOMPEndDeclareTargetDirective(OpenMPDirectiveKind DKind,
+                                         SourceLocation Loc);
   /// Parses declarative OpenMP directives.
   DeclGroupPtrTy ParseOpenMPDeclarativeDirectiveWithExtDecl(
       AccessSpecifier &AS, ParsedAttributesWithRange &Attrs,
@@ -2845,7 +2881,10 @@ public:
     DeclarationNameInfo ReductionId;
     OpenMPDependClauseKind DepKind = OMPC_DEPEND_unknown;
     OpenMPLinearClauseKind LinKind = OMPC_LINEAR_val;
-    OpenMPMapClauseKind MapTypeModifier = OMPC_MAP_unknown;
+    SmallVector<OpenMPMapModifierKind, OMPMapClause::NumberOfModifiers>
+    MapTypeModifiers;
+    SmallVector<SourceLocation, OMPMapClause::NumberOfModifiers>
+    MapTypeModifiersLoc;
     OpenMPMapClauseKind MapType = OMPC_MAP_unknown;
     bool IsMapTypeImplicit = false;
     SourceLocation DepLinMapLoc;
@@ -2960,6 +2999,7 @@ private:
   void CodeCompletePreprocessorExpression() override;
   void CodeCompleteMacroArgument(IdentifierInfo *Macro, MacroInfo *MacroInfo,
                                  unsigned ArgumentIndex) override;
+  void CodeCompleteIncludedFile(llvm::StringRef Dir, bool IsAngled) override;
   void CodeCompleteNaturalLanguage() override;
 };
 

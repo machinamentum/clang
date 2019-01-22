@@ -1,9 +1,8 @@
 //==-- CGFunctionInfo.h - Representation of function argument/return types -==//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -581,11 +580,11 @@ public:
   typedef ArgInfo *arg_iterator;
 
   typedef llvm::iterator_range<arg_iterator> arg_range;
-  typedef llvm::iterator_range<const_arg_iterator> arg_const_range;
+  typedef llvm::iterator_range<const_arg_iterator> const_arg_range;
 
   arg_range arguments() { return arg_range(arg_begin(), arg_end()); }
-  arg_const_range arguments() const {
-    return arg_const_range(arg_begin(), arg_end());
+  const_arg_range arguments() const {
+    return const_arg_range(arg_begin(), arg_end());
   }
 
   const_arg_iterator arg_begin() const { return getArgsBuffer() + 1; }

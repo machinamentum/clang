@@ -1,9 +1,8 @@
 //===--- DeclOpenMP.cpp - Declaration OpenMP AST Node Implementation ------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 /// \file
@@ -51,6 +50,38 @@ void OMPThreadPrivateDecl::setVars(ArrayRef<Expr *> VL) {
   assert(VL.size() == NumVars &&
          "Number of variables is not the same as the preallocated buffer");
   std::uninitialized_copy(VL.begin(), VL.end(), getTrailingObjects<Expr *>());
+}
+
+//===----------------------------------------------------------------------===//
+// OMPRequiresDecl Implementation.
+//===----------------------------------------------------------------------===//
+
+void OMPRequiresDecl::anchor() {}
+
+OMPRequiresDecl *OMPRequiresDecl::Create(ASTContext &C, DeclContext *DC,
+                                         SourceLocation L,
+                                         ArrayRef<OMPClause *> CL) {
+  OMPRequiresDecl *D =
+      new (C, DC, additionalSizeToAlloc<OMPClause *>(CL.size()))
+      OMPRequiresDecl(OMPRequires, DC, L);
+  D->NumClauses = CL.size();
+  D->setClauses(CL);
+  return D;
+}
+
+OMPRequiresDecl *OMPRequiresDecl::CreateDeserialized(ASTContext &C, unsigned ID,
+                                                     unsigned N) {
+  OMPRequiresDecl *D = new (C, ID, additionalSizeToAlloc<OMPClause *>(N))
+      OMPRequiresDecl(OMPRequires, nullptr, SourceLocation());
+  D->NumClauses = N;
+  return D;
+}
+
+void OMPRequiresDecl::setClauses(ArrayRef<OMPClause *> CL) {
+  assert(CL.size() == NumClauses &&
+         "Number of clauses is not the same as the preallocated buffer");
+  std::uninitialized_copy(CL.begin(), CL.end(),
+                          getTrailingObjects<OMPClause *>());
 }
 
 //===----------------------------------------------------------------------===//

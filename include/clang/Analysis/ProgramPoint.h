@@ -1,9 +1,8 @@
 //==- ProgramPoint.h - Program Points for Path-Sensitive Analysis --*- C++ -*-//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -80,6 +79,7 @@ public:
               CallEnterKind,
               CallExitBeginKind,
               CallExitEndKind,
+              FunctionExitKind,
               PreImplicitCallKind,
               PostImplicitCallKind,
               MinImplicitCallKind = PreImplicitCallKind,
@@ -214,6 +214,10 @@ public:
     ID.AddPointer(getTag());
   }
 
+  void print(StringRef CR, llvm::raw_ostream &Out) const;
+
+  LLVM_DUMP_METHOD void dump() const;
+
   static ProgramPoint getProgramPoint(const Stmt *S, ProgramPoint::Kind K,
                                       const LocationContext *LC,
                                       const ProgramPointTag *tag);
@@ -326,6 +330,29 @@ private:
   static bool isKind(const ProgramPoint &Location) {
     unsigned k = Location.getKind();
     return k >= MinPostStmtKind && k <= MaxPostStmtKind;
+  }
+};
+
+class FunctionExitPoint : public ProgramPoint {
+public:
+  explicit FunctionExitPoint(const ReturnStmt *S,
+                             const LocationContext *LC,
+                             const ProgramPointTag *tag = nullptr)
+      : ProgramPoint(S, FunctionExitKind, LC, tag) {}
+
+  const CFGBlock *getBlock() const {
+    return &getLocationContext()->getCFG()->getExit();
+  }
+
+  const ReturnStmt *getStmt() const {
+    return reinterpret_cast<const ReturnStmt *>(getData1());
+  }
+
+private:
+  friend class ProgramPoint;
+  FunctionExitPoint() = default;
+  static bool isKind(const ProgramPoint &Location) {
+    return Location.getKind() == FunctionExitKind;
   }
 };
 
@@ -749,9 +776,6 @@ static bool isEqual(const clang::ProgramPoint &L,
 }
 
 };
-
-template <>
-struct isPodLike<clang::ProgramPoint> { static const bool value = true; };
 
 } // end namespace llvm
 

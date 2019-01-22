@@ -1,9 +1,8 @@
 //===--- PPCallbacks.h - Callbacks for Preprocessor actions -----*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -276,6 +275,12 @@ public:
                        SourceRange Range) {
   }
 
+  /// Hook called when a '__has_include' or '__has_include_next' directive is
+  /// read.
+  virtual void HasInclude(SourceLocation Loc, StringRef FileName, bool IsAngled,
+                          const FileEntry *File,
+                          SrcMgr::CharacteristicKind FileType) {}
+
   /// Hook called when a source range is skipped.
   /// \param Range The SourceRange that was skipped. The range begins at the
   /// \#if/\#else directive and ends after the \#endif/\#else directive.
@@ -441,6 +446,13 @@ public:
                         diag::Severity mapping, StringRef Str) override {
     First->PragmaDiagnostic(Loc, Namespace, mapping, Str);
     Second->PragmaDiagnostic(Loc, Namespace, mapping, Str);
+  }
+
+  void HasInclude(SourceLocation Loc, StringRef FileName, bool IsAngled,
+                  const FileEntry *File,
+                  SrcMgr::CharacteristicKind FileType) override {
+    First->HasInclude(Loc, FileName, IsAngled, File, FileType);
+    Second->HasInclude(Loc, FileName, IsAngled, File, FileType);
   }
 
   void PragmaOpenCLExtension(SourceLocation NameLoc, const IdentifierInfo *Name,

@@ -1,9 +1,8 @@
 //===--- SemaObjCProperty.cpp - Semantic Analysis for ObjC @property ------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -1412,9 +1411,9 @@ Decl *Sema::ActOnPropertyImplDecl(Scope *S,
       // FIXME. Eventually we want to do this for Objective-C as well.
       SynthesizedFunctionScope Scope(*this, getterMethod);
       ImplicitParamDecl *SelfDecl = getterMethod->getSelfDecl();
-      DeclRefExpr *SelfExpr =
-        new (Context) DeclRefExpr(SelfDecl, false, SelfDecl->getType(),
-                                  VK_LValue, PropertyDiagLoc);
+      DeclRefExpr *SelfExpr = new (Context)
+          DeclRefExpr(Context, SelfDecl, false, SelfDecl->getType(), VK_LValue,
+                      PropertyDiagLoc);
       MarkDeclRefReferenced(SelfExpr);
       Expr *LoadSelfExpr =
         ImplicitCastExpr::Create(Context, SelfDecl->getType(),
@@ -1464,9 +1463,9 @@ Decl *Sema::ActOnPropertyImplDecl(Scope *S,
       // FIXME. Eventually we want to do this for Objective-C as well.
       SynthesizedFunctionScope Scope(*this, setterMethod);
       ImplicitParamDecl *SelfDecl = setterMethod->getSelfDecl();
-      DeclRefExpr *SelfExpr =
-        new (Context) DeclRefExpr(SelfDecl, false, SelfDecl->getType(),
-                                  VK_LValue, PropertyDiagLoc);
+      DeclRefExpr *SelfExpr = new (Context)
+          DeclRefExpr(Context, SelfDecl, false, SelfDecl->getType(), VK_LValue,
+                      PropertyDiagLoc);
       MarkDeclRefReferenced(SelfExpr);
       Expr *LoadSelfExpr =
         ImplicitCastExpr::Create(Context, SelfDecl->getType(),
@@ -1481,8 +1480,8 @@ Decl *Sema::ActOnPropertyImplDecl(Scope *S,
       ObjCMethodDecl::param_iterator P = setterMethod->param_begin();
       ParmVarDecl *Param = (*P);
       QualType T = Param->getType().getNonReferenceType();
-      DeclRefExpr *rhs = new (Context) DeclRefExpr(Param, false, T,
-                                                   VK_LValue, PropertyDiagLoc);
+      DeclRefExpr *rhs = new (Context)
+          DeclRefExpr(Context, Param, false, T, VK_LValue, PropertyDiagLoc);
       MarkDeclRefReferenced(rhs);
       ExprResult Res = BuildBinOp(S, PropertyDiagLoc,
                                   BO_Assign, lhs, rhs);
@@ -2384,7 +2383,7 @@ void Sema::ProcessPropertyDecl(ObjCPropertyDecl *property) {
       QualType modifiedTy = resultTy;
       if (auto nullability = AttributedType::stripOuterNullability(modifiedTy)) {
         if (*nullability == NullabilityKind::Unspecified)
-          resultTy = Context.getAttributedType(AttributedType::attr_nonnull,
+          resultTy = Context.getAttributedType(attr::TypeNonNull,
                                                modifiedTy, modifiedTy);
       }
     }
@@ -2458,7 +2457,7 @@ void Sema::ProcessPropertyDecl(ObjCPropertyDecl *property) {
         QualType modifiedTy = paramTy;
         if (auto nullability = AttributedType::stripOuterNullability(modifiedTy)){
           if (*nullability == NullabilityKind::Unspecified)
-            paramTy = Context.getAttributedType(AttributedType::attr_nullable,
+            paramTy = Context.getAttributedType(attr::TypeNullable,
                                                 modifiedTy, modifiedTy);
         }
       }
@@ -2555,6 +2554,14 @@ void Sema::CheckObjCPropertyAttributes(Decl *PDecl,
     Attributes &= ~(ObjCDeclSpec::DQ_PR_weak   | ObjCDeclSpec::DQ_PR_copy |
                     ObjCDeclSpec::DQ_PR_retain | ObjCDeclSpec::DQ_PR_strong);
     PropertyDecl->setInvalidDecl();
+  }
+
+  // Check for assign on object types.
+  if ((Attributes & ObjCDeclSpec::DQ_PR_assign) &&
+      !(Attributes & ObjCDeclSpec::DQ_PR_unsafe_unretained) &&
+      PropertyTy->isObjCRetainableType() &&
+      !PropertyTy->isObjCARCImplicitlyUnretainedType()) {
+    Diag(Loc, diag::warn_objc_property_assign_on_object);
   }
 
   // Check for more than one of { assign, copy, retain }.

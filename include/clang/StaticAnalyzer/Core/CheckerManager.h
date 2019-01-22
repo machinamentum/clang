@@ -1,9 +1,8 @@
 //===- CheckerManager.h - Static Analyzer Checker Manager -------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -532,19 +531,19 @@ public:
 
   template <typename EVENT>
   void _registerListenerForEvent(CheckEventFunc checkfn) {
-    EventInfo &info = Events[getTag<EVENT>()];
+    EventInfo &info = Events[&EVENT::Tag];
     info.Checkers.push_back(checkfn);
   }
 
   template <typename EVENT>
   void _registerDispatcherForEvent() {
-    EventInfo &info = Events[getTag<EVENT>()];
+    EventInfo &info = Events[&EVENT::Tag];
     info.HasDispatcher = true;
   }
 
   template <typename EVENT>
   void _dispatchEvent(const EVENT &event) const {
-    EventsTy::const_iterator I = Events.find(getTag<EVENT>());
+    EventsTy::const_iterator I = Events.find(&EVENT::Tag);
     if (I == Events.end())
       return;
     const EventInfo &info = I->second;

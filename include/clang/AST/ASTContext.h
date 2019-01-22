@@ -1,9 +1,8 @@
 //===- ASTContext.h - Context to hold long-lived AST nodes ------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -15,6 +14,7 @@
 #ifndef LLVM_CLANG_AST_ASTCONTEXT_H
 #define LLVM_CLANG_AST_ASTCONTEXT_H
 
+#include "clang/AST/ASTContextAllocate.h"
 #include "clang/AST/ASTTypeTraits.h"
 #include "clang/AST/CanonicalType.h"
 #include "clang/AST/CommentCommandTraits.h"
@@ -31,6 +31,7 @@
 #include "clang/AST/TemplateName.h"
 #include "clang/AST/Type.h"
 #include "clang/Basic/AddressSpaces.h"
+#include "clang/Basic/AttrKinds.h"
 #include "clang/Basic/IdentifierTable.h"
 #include "clang/Basic/LLVM.h"
 #include "clang/Basic/LangOptions.h"
@@ -335,7 +336,7 @@ private:
   mutable IdentifierInfo *BoolName = nullptr;
 
   /// The identifier 'NSObject'.
-  IdentifierInfo *NSObjectName = nullptr;
+  mutable IdentifierInfo *NSObjectName = nullptr;
 
   /// The identifier 'NSCopying'.
   IdentifierInfo *NSCopyingName = nullptr;
@@ -568,26 +569,6 @@ public:
   IntrusiveRefCntPtr<ExternalASTSource> ExternalSource;
   ASTMutationListener *Listener = nullptr;
 
-  /// Contains parents of a node.
-  using ParentVector = llvm::SmallVector<ast_type_traits::DynTypedNode, 2>;
-
-  /// Maps from a node to its parents. This is used for nodes that have
-  /// pointer identity only, which are more common and we can save space by
-  /// only storing a unique pointer to them.
-  using ParentMapPointers =
-      llvm::DenseMap<const void *,
-                     llvm::PointerUnion4<const Decl *, const Stmt *,
-                                         ast_type_traits::DynTypedNode *,
-                                         ParentVector *>>;
-
-  /// Parent map for nodes without pointer identity. We store a full
-  /// DynTypedNode for all keys.
-  using ParentMapOtherNodes =
-      llvm::DenseMap<ast_type_traits::DynTypedNode,
-                     llvm::PointerUnion4<const Decl *, const Stmt *,
-                                         ast_type_traits::DynTypedNode *,
-                                         ParentVector *>>;
-
   /// Container for either a single DynTypedNode or for an ArrayRef to
   /// DynTypedNode. For use with ParentMap.
   class DynTypedNodeList {
@@ -629,7 +610,17 @@ public:
     }
   };
 
-  /// Returns the parents of the given node.
+  // A traversal scope limits the parts of the AST visible to certain analyses.
+  // RecursiveASTVisitor::TraverseAST will only visit reachable nodes, and
+  // getParents() will only observe reachable parent edges.
+  //
+  // The scope is defined by a set of "top-level" declarations.
+  // Initially, it is the entire TU: {getTranslationUnitDecl()}.
+  // Changing the scope clears the parent cache, which is expensive to rebuild.
+  std::vector<Decl *> getTraversalScope() const { return TraversalScope; }
+  void setTraversalScope(const std::vector<Decl *> &);
+
+  /// Returns the parents of the given node (within the traversal scope).
   ///
   /// Note that this will lazily compute the parents of all nodes
   /// and store them for later retrieval. Thus, the first call is O(n)
@@ -996,7 +987,8 @@ public:
   /// Get the additional modules in which the definition \p Def has
   /// been merged.
   ArrayRef<Module*> getModulesWithMergedDefinition(const NamedDecl *Def) {
-    auto MergedIt = MergedDefModules.find(Def);
+    auto MergedIt =
+        MergedDefModules.find(cast<NamedDecl>(Def->getCanonicalDecl()));
     if (MergedIt == MergedDefModules.end())
       return None;
     return MergedIt->second;
@@ -1060,6 +1052,9 @@ public:
   CanQualType OCLSamplerTy, OCLEventTy, OCLClkEventTy;
   CanQualType OCLQueueTy, OCLReserveIDTy;
   CanQualType OMPArraySectionTy;
+#define EXT_OPAQUE_TYPE(ExtType, Id, Ext) \
+  CanQualType Id##Ty;
+#include "clang/Basic/OpenCLExtensionTypes.def"
 
   // Types for deductions in C++0x [stmt.ranged]'s desugaring. Built on demand.
   mutable QualType AutoDeductTy;     // Deduction against 'auto'.
@@ -1422,7 +1417,7 @@ public:
 
   QualType getInjectedClassNameType(CXXRecordDecl *Decl, QualType TST) const;
 
-  QualType getAttributedType(AttributedType::Kind attrKind,
+  QualType getAttributedType(attr::Kind attrKind,
                              QualType modifiedType,
                              QualType equivalentType);
 
@@ -1675,7 +1670,7 @@ public:
   }
 
   /// Retrieve the identifier 'NSObject'.
-  IdentifierInfo *getNSObjectName() {
+  IdentifierInfo *getNSObjectName() const {
     if (!NSObjectName) {
       NSObjectName = &Idents.get("NSObject");
     }
@@ -2006,6 +2001,9 @@ public:
   enum GetBuiltinTypeError {
     /// No error
     GE_None,
+
+    /// Missing a type
+    GE_Missing_type,
 
     /// Missing a type from <stdio.h>
     GE_Missing_stdio,
@@ -2628,6 +2626,12 @@ public:
   // corresponding saturated type for a given fixed point type.
   QualType getCorrespondingSaturatedType(QualType Ty) const;
 
+  // This method accepts fixed point types and returns the corresponding signed
+  // type. Unlike getCorrespondingUnsignedType(), this only accepts unsigned
+  // fixed point types because there are unsigned integer types like bool and
+  // char8_t that don't have signed equivalents.
+  QualType getCorrespondingSignedFixedPointType(QualType Ty) const;
+
   //===--------------------------------------------------------------------===//
   //                    Integer Values
   //===--------------------------------------------------------------------===//
@@ -2743,7 +2747,7 @@ public:
   /// predicate.
   void forEachMultiversionedFunctionVersion(
       const FunctionDecl *FD,
-      llvm::function_ref<void(const FunctionDecl *)> Pred) const;
+      llvm::function_ref<void(FunctionDecl *)> Pred) const;
 
   const CXXConstructorDecl *
   getCopyConstructorForExceptionObject(CXXRecordDecl *RD);
@@ -2919,13 +2923,13 @@ private:
   // but we include it here so that ASTContext can quickly deallocate them.
   llvm::PointerIntPair<StoredDeclsMap *, 1> LastSDM;
 
-  std::unique_ptr<ParentMapPointers> PointerParents;
-  std::unique_ptr<ParentMapOtherNodes> OtherParents;
+  std::vector<Decl *> TraversalScope;
+  class ParentMap;
+  std::unique_ptr<ParentMap> Parents;
 
   std::unique_ptr<VTableContextBase> VTContext;
 
   void ReleaseDeclContextMaps();
-  void ReleaseParentMapEntries();
 
 public:
   enum PragmaSectionFlag : unsigned {
@@ -2974,8 +2978,8 @@ inline Selector GetUnarySelector(StringRef name, ASTContext &Ctx) {
 /// This placement form of operator new uses the ASTContext's allocator for
 /// obtaining memory.
 ///
-/// IMPORTANT: These are also declared in clang/AST/AttrIterator.h! Any changes
-/// here need to also be made there.
+/// IMPORTANT: These are also declared in clang/AST/ASTContextAllocate.h!
+/// Any changes here need to also be made there.
 ///
 /// We intentionally avoid using a nothrow specification here so that the calls
 /// to this operator will not perform a null check on the result -- the
@@ -2998,7 +3002,7 @@ inline Selector GetUnarySelector(StringRef name, ASTContext &Ctx) {
 ///                  allocator supports it).
 /// @return The allocated memory. Could be nullptr.
 inline void *operator new(size_t Bytes, const clang::ASTContext &C,
-                          size_t Alignment) {
+                          size_t Alignment /* = 8 */) {
   return C.Allocate(Bytes, Alignment);
 }
 
@@ -3036,7 +3040,7 @@ inline void operator delete(void *Ptr, const clang::ASTContext &C, size_t) {
 ///                  allocator supports it).
 /// @return The allocated memory. Could be nullptr.
 inline void *operator new[](size_t Bytes, const clang::ASTContext& C,
-                            size_t Alignment = 8) {
+                            size_t Alignment /* = 8 */) {
   return C.Allocate(Bytes, Alignment);
 }
 

@@ -1,9 +1,8 @@
 //===- DeclBase.h - Base Classes for representing declarations --*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -16,6 +15,7 @@
 
 #include "clang/AST/AttrIterator.h"
 #include "clang/AST/DeclarationName.h"
+#include "clang/Basic/IdentifierTable.h"
 #include "clang/Basic/LLVM.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/Specifiers.h"
@@ -406,18 +406,10 @@ public:
     return SourceRange(getLocation(), getLocation());
   }
 
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocStart() const LLVM_READONLY,
-                            "Use getBeginLoc instead") {
-    return getBeginLoc();
-  }
   SourceLocation getBeginLoc() const LLVM_READONLY {
     return getSourceRange().getBegin();
   }
 
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocEnd() const LLVM_READONLY,
-                            "Use getEndLoc instead") {
-    return getEndLoc();
-  }
   SourceLocation getEndLoc() const LLVM_READONLY {
     return getSourceRange().getEnd();
   }
@@ -489,13 +481,7 @@ public:
 
   const AttrVec &getAttrs() const;
   void dropAttrs();
-
-  void addAttr(Attr *A) {
-    if (hasAttrs())
-      getAttrs().push_back(A);
-    else
-      setAttrs(AttrVec(1, A));
-  }
+  void addAttr(Attr *A);
 
   using attr_iterator = AttrVec::const_iterator;
   using attr_range = llvm::iterator_range<attr_iterator>;
@@ -1078,11 +1064,11 @@ public:
     unsigned OldNS = IdentifierNamespace;
     assert((OldNS & (IDNS_Tag | IDNS_Ordinary |
                      IDNS_TagFriend | IDNS_OrdinaryFriend |
-                     IDNS_LocalExtern)) &&
+                     IDNS_LocalExtern | IDNS_NonMemberOperator)) &&
            "namespace includes neither ordinary nor tag");
     assert(!(OldNS & ~(IDNS_Tag | IDNS_Ordinary | IDNS_Type |
                        IDNS_TagFriend | IDNS_OrdinaryFriend |
-                       IDNS_LocalExtern)) &&
+                       IDNS_LocalExtern | IDNS_NonMemberOperator)) &&
            "namespace includes other than ordinary or tag");
 
     Decl *Prev = getPreviousDecl();
@@ -1095,7 +1081,8 @@ public:
         IdentifierNamespace |= IDNS_Tag | IDNS_Type;
     }
 
-    if (OldNS & (IDNS_Ordinary | IDNS_OrdinaryFriend | IDNS_LocalExtern)) {
+    if (OldNS & (IDNS_Ordinary | IDNS_OrdinaryFriend |
+                 IDNS_LocalExtern | IDNS_NonMemberOperator)) {
       IdentifierNamespace |= IDNS_OrdinaryFriend;
       if (PerformFriendInjection ||
           (Prev && Prev->getIdentifierNamespace() & IDNS_Ordinary))
@@ -1148,6 +1135,9 @@ public:
   void dumpColor() const;
 
   void dump(raw_ostream &Out, bool Deserialize = false) const;
+
+  /// \return Unique reproducible object identifier
+  int64_t getID() const;
 
   /// Looks through the Decl's underlying type to extract a FunctionType
   /// when possible. Will return null if the type underlying the Decl does not
@@ -1222,7 +1212,6 @@ public:
     value_type SingleElement;
 
   public:
-    iterator() = default;
     explicit iterator(pointer Pos, value_type Single = nullptr)
         : IteratorBase(Pos), SingleElement(Single) {}
 
@@ -1562,13 +1551,6 @@ class DeclContext {
   /// methods in ObjCMethodDecl should be updated appropriately.
   class ObjCMethodDeclBitfields {
     friend class ObjCMethodDecl;
-
-    /// This is needed for the bitwidth of Family below but
-    /// is defined in Basic/IdentifierTable.h which we do not include.
-    /// To avoid mismatches between the two definitions we have
-    /// a static_assert in the ctor of ObjCMethodDecl which checks
-    /// that these two ObjCMethodFamilyBitWidth are equal.
-    enum { ObjCMethodFamilyBitWidth = 4 };
 
     /// For the bits in DeclContextBitfields.
     uint64_t : NumDeclContextBits;

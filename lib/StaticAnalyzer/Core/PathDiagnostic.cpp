@@ -1,9 +1,8 @@
 //===- PathDiagnostic.cpp - Path-Specific Diagnostic Handling -------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -723,6 +722,8 @@ PathDiagnosticLocation::create(const ProgramPoint& P,
   } else if (Optional<PostInitializer> PIP = P.getAs<PostInitializer>()) {
     return PathDiagnosticLocation(PIP->getInitializer()->getSourceLocation(),
                                   SMng);
+  } else if (Optional<PreImplicitCall> PIC = P.getAs<PreImplicitCall>()) {
+    return PathDiagnosticLocation(PIC->getLocation(), SMng);
   } else if (Optional<PostImplicitCall> PIE = P.getAs<PostImplicitCall>()) {
     return PathDiagnosticLocation(PIE->getLocation(), SMng);
   } else if (Optional<CallEnter> CE = P.getAs<CallEnter>()) {
@@ -733,6 +734,12 @@ PathDiagnosticLocation::create(const ProgramPoint& P,
     return getLocationForCaller(CEE->getCalleeContext(),
                                 CEE->getLocationContext(),
                                 SMng);
+  } else if (auto CEB = P.getAs<CallExitBegin>()) {
+    if (const ReturnStmt *RS = CEB->getReturnStmt())
+      return PathDiagnosticLocation::createBegin(RS, SMng,
+                                                 CEB->getLocationContext());
+    return PathDiagnosticLocation(
+        CEB->getLocationContext()->getDecl()->getSourceRange().getEnd(), SMng);
   } else if (Optional<BlockEntrance> BE = P.getAs<BlockEntrance>()) {
     CFGElement BlockFront = BE->getBlock()->front();
     if (auto StmtElt = BlockFront.getAs<CFGStmt>()) {
@@ -774,18 +781,20 @@ const Stmt *PathDiagnosticLocation::getStmt(const ExplodedNode *N) {
   }
   // Otherwise, see if the node's program point directly points to a statement.
   ProgramPoint P = N->getLocation();
-  if (Optional<StmtPoint> SP = P.getAs<StmtPoint>())
+  if (auto SP = P.getAs<StmtPoint>())
     return SP->getStmt();
-  if (Optional<BlockEdge> BE = P.getAs<BlockEdge>())
+  if (auto BE = P.getAs<BlockEdge>())
     return BE->getSrc()->getTerminator();
-  if (Optional<CallEnter> CE = P.getAs<CallEnter>())
+  if (auto CE = P.getAs<CallEnter>())
     return CE->getCallExpr();
-  if (Optional<CallExitEnd> CEE = P.getAs<CallExitEnd>())
+  if (auto CEE = P.getAs<CallExitEnd>())
     return CEE->getCalleeContext()->getCallSite();
-  if (Optional<PostInitializer> PIPP = P.getAs<PostInitializer>())
+  if (auto PIPP = P.getAs<PostInitializer>())
     return PIPP->getInitializer()->getInit();
-  if (Optional<CallExitBegin> CEB = P.getAs<CallExitBegin>())
+  if (auto CEB = P.getAs<CallExitBegin>())
     return CEB->getReturnStmt();
+  if (auto FEP = P.getAs<FunctionExitPoint>())
+    return FEP->getStmt();
 
   return nullptr;
 }
@@ -822,17 +831,21 @@ PathDiagnosticLocation
                                           const SourceManager &SM) {
   assert(N && "Cannot create a location with a null node.");
   const Stmt *S = getStmt(N);
+  const LocationContext *LC = N->getLocationContext();
 
   if (!S) {
     // If this is an implicit call, return the implicit call point location.
     if (Optional<PreImplicitCall> PIE = N->getLocationAs<PreImplicitCall>())
       return PathDiagnosticLocation(PIE->getLocation(), SM);
+    if (auto FE = N->getLocationAs<FunctionExitPoint>()) {
+      if (const ReturnStmt *RS = FE->getStmt())
+        return PathDiagnosticLocation::createBegin(RS, SM, LC);
+    }
     S = getNextStmt(N);
   }
 
   if (S) {
     ProgramPoint P = N->getLocation();
-    const LocationContext *LC = N->getLocationContext();
 
     // For member expressions, return the location of the '.' or '->'.
     if (const auto *ME = dyn_cast<MemberExpr>(S))
@@ -964,7 +977,7 @@ void PathDiagnosticLocation::flatten() {
 //===----------------------------------------------------------------------===//
 
 std::shared_ptr<PathDiagnosticCallPiece>
-PathDiagnosticCallPiece::construct(const ExplodedNode *N, const CallExitEnd &CE,
+PathDiagnosticCallPiece::construct(const CallExitEnd &CE,
                                    const SourceManager &SM) {
   const Decl *caller = CE.getLocationContext()->getDecl();
   PathDiagnosticLocation pos = getLocationForCaller(CE.getCalleeContext(),

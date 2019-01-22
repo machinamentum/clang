@@ -1,9 +1,8 @@
 //===- Lookup.h - Classes for name lookup -----------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -540,7 +539,7 @@ public:
   }
 
   /// Clears out any current state.
-  void clear() {
+  LLVM_ATTRIBUTE_REINITIALIZES void clear() {
     ResultKind = NotFound;
     Decls.clear();
     if (Paths) deletePaths(Paths);
@@ -709,7 +708,9 @@ private:
 
   // Results.
   LookupResultKind ResultKind = NotFound;
-  AmbiguityKind Ambiguity; // ill-defined unless ambiguous
+  // ill-defined unless ambiguous. Still need to be initialized it will be
+  // copied/moved.
+  AmbiguityKind Ambiguity = {};
   UnresolvedSet<8> Decls;
   CXXBasePaths *Paths = nullptr;
   CXXRecordDecl *NamingClass = nullptr;

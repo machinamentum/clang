@@ -1,9 +1,8 @@
 //===- PathDiagnostic.h - Path-Specific Diagnostic Handling -----*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -118,7 +117,7 @@ public:
     /// Only runs visitors, no output generated.
     None,
 
-    /// Used for HTML and text output.
+    /// Used for HTML, SARIF, and text output.
     Minimal,
 
     /// Used for plist output, used for "arrows" generation.
@@ -632,7 +631,7 @@ public:
   }
 
   static std::shared_ptr<PathDiagnosticCallPiece>
-  construct(const ExplodedNode *N, const CallExitEnd &CE,
+  construct(const CallExitEnd &CE,
             const SourceManager &SM);
 
   static PathDiagnosticCallPiece *construct(PathPieces &pieces,
@@ -759,7 +758,7 @@ public:
 };
 
 /// File IDs mapped to sets of line numbers.
-using FilesToLineNumsMap = std::map<unsigned, std::set<unsigned>>;
+using FilesToLineNumsMap = std::map<FileID, std::set<unsigned>>;
 
 /// PathDiagnostic - PathDiagnostic objects represent a single path-sensitive
 ///  diagnostic.  It represents an ordered-collection of PathDiagnosticPieces,
@@ -858,13 +857,13 @@ public:
   meta_iterator meta_end() const { return OtherDesc.end(); }
   void addMeta(StringRef s) { OtherDesc.push_back(s); }
 
-  using filesmap_iterator = FilesToLineNumsMap::const_iterator;
-
-  filesmap_iterator executedLines_begin() const {
-    return ExecutedLines->begin();
+  const FilesToLineNumsMap &getExecutedLines() const {
+    return *ExecutedLines;
   }
 
-  filesmap_iterator executedLines_end() const { return ExecutedLines->end(); }
+  FilesToLineNumsMap &getExecutedLines() {
+    return *ExecutedLines;
+  }
 
   PathDiagnosticLocation getLocation() const {
     return Loc;

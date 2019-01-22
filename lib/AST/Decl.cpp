@@ -1,9 +1,8 @@
 //===- Decl.cpp - Declaration AST Node Implementation ---------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -14,6 +13,7 @@
 #include "clang/AST/Decl.h"
 #include "Linkage.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/ASTDiagnostic.h"
 #include "clang/AST/ASTLambda.h"
 #include "clang/AST/ASTMutationListener.h"
 #include "clang/AST/CanonicalType.h"
@@ -49,7 +49,6 @@
 #include "clang/Basic/TargetCXXABI.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Basic/Visibility.h"
-#include "clang/Frontend/FrontendDiagnostic.h"
 #include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/None.h"
@@ -725,7 +724,7 @@ LinkageComputer::getLVForNamespaceScopeDecl(const NamedDecl *D,
       // If we're paying attention to global visibility, apply
       // -finline-visibility-hidden if this is an inline method.
       if (useInlineVisibilityHidden(D))
-        LV.mergeVisibility(HiddenVisibility, true);
+        LV.mergeVisibility(HiddenVisibility, /*visibilityExplicit=*/false);
     }
   }
 
@@ -915,7 +914,7 @@ LinkageComputer::getLVForClassMember(const NamedDecl *D,
     // Note that we do this before merging information about
     // the class visibility.
     if (!LV.isVisibilityExplicit() && useInlineVisibilityHidden(D))
-      LV.mergeVisibility(HiddenVisibility, true);
+      LV.mergeVisibility(HiddenVisibility, /*visibilityExplicit=*/false);
   }
 
   // If this class member has an explicit visibility attribute, the only
@@ -1262,7 +1261,27 @@ LinkageInfo LinkageComputer::getLVForLocalDecl(const NamedDecl *D,
         !isTemplateInstantiation(FD->getTemplateSpecializationKind()))
       return LinkageInfo::none();
 
+    // If a function is hidden by -fvisibility-inlines-hidden option and
+    // is not explicitly attributed as a hidden function,
+    // we should not make static local variables in the function hidden.
     LV = getLVForDecl(FD, computation);
+    if (isa<VarDecl>(D) && useInlineVisibilityHidden(FD) &&
+        !LV.isVisibilityExplicit()) {
+      assert(cast<VarDecl>(D)->isStaticLocal());
+      // If this was an implicitly hidden inline method, check again for
+      // explicit visibility on the parent class, and use that for static locals
+      // if present.
+      if (const auto *MD = dyn_cast<CXXMethodDecl>(FD))
+        LV = getLVForDecl(MD->getParent(), computation);
+      if (!LV.isVisibilityExplicit()) {
+        Visibility globalVisibility =
+            computation.isValueVisibility()
+                ? Context.getLangOpts().getValueVisibilityMode()
+                : Context.getLangOpts().getTypeVisibilityMode();
+        return LinkageInfo(VisibleNoLinkage, globalVisibility,
+                           /*visibilityExplicit=*/false);
+      }
+    }
   }
   if (!isExternallyVisible(LV.getLinkage()))
     return LinkageInfo::none();
@@ -2351,6 +2370,14 @@ static DeclT *getDefinitionOrSelf(DeclT *D) {
   return D;
 }
 
+bool VarDecl::isEscapingByref() const {
+  return hasAttr<BlocksAttr>() && NonParmVarDeclBits.EscapingByref;
+}
+
+bool VarDecl::isNonEscapingByref() const {
+  return hasAttr<BlocksAttr>() && !NonParmVarDeclBits.EscapingByref;
+}
+
 VarDecl *VarDecl::getTemplateInstantiationPattern() const {
   // If it's a variable template specialization, find the template or partial
   // specialization from which it was instantiated.
@@ -2441,12 +2468,18 @@ bool VarDecl::isKnownToBeDefined() const {
   //
   // With CUDA relocatable device code enabled, these variables don't get
   // special handling; they're treated like regular extern variables.
-  if (LangOpts.CUDA && !LangOpts.CUDARelocatableDeviceCode &&
+  if (LangOpts.CUDA && !LangOpts.GPURelocatableDeviceCode &&
       hasExternalStorage() && hasAttr<CUDASharedAttr>() &&
       isa<IncompleteArrayType>(getType()))
     return true;
 
   return hasDefinition();
+}
+
+bool VarDecl::isNoDestroy(const ASTContext &Ctx) const {
+  return hasGlobalStorage() && (hasAttr<NoDestroyAttr>() ||
+                                (!Ctx.getLangOpts().RegisterStaticDestructors &&
+                                 !hasAttr<AlwaysDestroyAttr>()));
 }
 
 MemberSpecializationInfo *VarDecl::getMemberSpecializationInfo() const {
@@ -2542,7 +2575,7 @@ Expr *ParmVarDecl::getDefaultArg() {
          "Default argument is not yet instantiated!");
 
   Expr *Arg = getInit();
-  if (auto *E = dyn_cast_or_null<ExprWithCleanups>(Arg))
+  if (auto *E = dyn_cast_or_null<FullExpr>(Arg))
     return E->getSubExpr();
 
   return Arg;
@@ -2618,27 +2651,30 @@ FunctionDecl::FunctionDecl(Kind DK, ASTContext &C, DeclContext *DC,
                      StartLoc),
       DeclContext(DK), redeclarable_base(C), ODRHash(0),
       EndRangeLoc(NameInfo.getEndLoc()), DNLoc(NameInfo.getInfo()) {
-  setStorageClass(S);
-  setInlineSpecified(isInlineSpecified);
-  setExplicitSpecified(false);
-  setVirtualAsWritten(false);
-  setPure(false);
-  setHasInheritedPrototype(false);
-  setHasWrittenPrototype(true);
-  setDeletedAsWritten(false);
-  setTrivial(false);
-  setTrivialForCall(false);
-  setDefaulted(false);
-  setExplicitlyDefaulted(false);
-  setHasImplicitReturnZero(false);
-  setLateTemplateParsed(false);
-  setConstexpr(isConstexprSpecified);
-  setInstantiationIsPending(false);
-  setUsesSEHTry(false);
-  setHasSkippedBody(false);
-  setWillHaveBody(false);
-  setIsMultiVersion(false);
-  setHasODRHash(false);
+  assert(T.isNull() || T->isFunctionType());
+  FunctionDeclBits.SClass = S;
+  FunctionDeclBits.IsInline = isInlineSpecified;
+  FunctionDeclBits.IsInlineSpecified = isInlineSpecified;
+  FunctionDeclBits.IsExplicitSpecified = false;
+  FunctionDeclBits.IsVirtualAsWritten = false;
+  FunctionDeclBits.IsPure = false;
+  FunctionDeclBits.HasInheritedPrototype = false;
+  FunctionDeclBits.HasWrittenPrototype = true;
+  FunctionDeclBits.IsDeleted = false;
+  FunctionDeclBits.IsTrivial = false;
+  FunctionDeclBits.IsTrivialForCall = false;
+  FunctionDeclBits.IsDefaulted = false;
+  FunctionDeclBits.IsExplicitlyDefaulted = false;
+  FunctionDeclBits.HasImplicitReturnZero = false;
+  FunctionDeclBits.IsLateTemplateParsed = false;
+  FunctionDeclBits.IsConstexpr = isConstexprSpecified;
+  FunctionDeclBits.InstantiationIsPending = false;
+  FunctionDeclBits.UsesSEHTry = false;
+  FunctionDeclBits.HasSkippedBody = false;
+  FunctionDeclBits.WillHaveBody = false;
+  FunctionDeclBits.IsMultiVersion = false;
+  FunctionDeclBits.IsCopyDeductionCandidate = false;
+  FunctionDeclBits.HasODRHash = false;
 }
 
 void FunctionDecl::getNameForDiagnostic(
@@ -2905,12 +2941,27 @@ bool FunctionDecl::isNoReturn() const {
   return false;
 }
 
+
+MultiVersionKind FunctionDecl::getMultiVersionKind() const {
+  if (hasAttr<TargetAttr>())
+    return MultiVersionKind::Target;
+  if (hasAttr<CPUDispatchAttr>())
+    return MultiVersionKind::CPUDispatch;
+  if (hasAttr<CPUSpecificAttr>())
+    return MultiVersionKind::CPUSpecific;
+  return MultiVersionKind::None;
+}
+
 bool FunctionDecl::isCPUDispatchMultiVersion() const {
   return isMultiVersion() && hasAttr<CPUDispatchAttr>();
 }
 
 bool FunctionDecl::isCPUSpecificMultiVersion() const {
   return isMultiVersion() && hasAttr<CPUSpecificAttr>();
+}
+
+bool FunctionDecl::isTargetMultiVersion() const {
+  return isMultiVersion() && hasAttr<TargetAttr>();
 }
 
 void
@@ -3177,20 +3228,6 @@ SourceRange FunctionDecl::getExceptionSpecSourceRange() const {
     return SourceRange();
 
   return FTL.getExceptionSpecRange();
-}
-
-const Attr *FunctionDecl::getUnusedResultAttr() const {
-  QualType RetType = getReturnType();
-  if (const auto *Ret = RetType->getAsRecordDecl()) {
-    if (const auto *R = Ret->getAttr<WarnUnusedResultAttr>())
-      return R;
-  } else if (const auto *ET = RetType->getAs<EnumType>()) {
-    if (const EnumDecl *ED = ET->getDecl()) {
-      if (const auto *R = ED->getAttr<WarnUnusedResultAttr>())
-        return R;
-    }
-  }
-  return getAttr<WarnUnusedResultAttr>();
 }
 
 /// For an inline function definition in C, or for a gnu_inline function

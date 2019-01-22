@@ -1,9 +1,8 @@
 //===--- RewriteObjCFoundationAPI.cpp - Foundation API Rewriter -----------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -1078,13 +1077,16 @@ static bool rewriteToNumericBoxedExpression(const ObjCMessageExpr *Msg,
     case CK_NonAtomicToAtomic:
     case CK_CopyAndAutoreleaseBlockObject:
     case CK_BuiltinFnToFnPtr:
-    case CK_ZeroToOCLEvent:
-    case CK_ZeroToOCLQueue:
+    case CK_ZeroToOCLOpaqueType:
     case CK_IntToOCLSampler:
       return false;
 
     case CK_BooleanToSignedIntegral:
       llvm_unreachable("OpenCL-specific cast in Objective-C?");
+
+    case CK_FixedPointCast:
+    case CK_FixedPointToBoolean:
+      llvm_unreachable("Fixed point types are disabled for Objective-C");
     }
   }
 

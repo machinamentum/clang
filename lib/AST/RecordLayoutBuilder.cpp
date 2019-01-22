@@ -1,14 +1,14 @@
 //=== RecordLayoutBuilder.cpp - Helper class for building record layouts ---==//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
 #include "clang/AST/RecordLayout.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/ASTDiagnostic.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/CXXInheritance.h"
 #include "clang/AST/Decl.h"
@@ -16,7 +16,6 @@
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/Expr.h"
 #include "clang/Basic/TargetInfo.h"
-#include "clang/Sema/SemaDiagnostic.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/MathExtras.h"
@@ -2829,14 +2828,13 @@ void MicrosoftRecordLayoutBuilder::layoutVirtualBases(const CXXRecordDecl *RD) {
     CharUnits BaseOffset;
 
     // Respect the external AST source base offset, if present.
-    bool FoundBase = false;
     if (UseExternalLayout) {
-      FoundBase = External.getExternalVBaseOffset(BaseDecl, BaseOffset);
-      if (FoundBase)
-        assert(BaseOffset >= Size && "base offset already allocated");
-    }
-    if (!FoundBase)
+      if (!External.getExternalVBaseOffset(BaseDecl, BaseOffset))
+        BaseOffset = Size;
+    } else
       BaseOffset = Size.alignTo(Info.Alignment);
+
+    assert(BaseOffset >= Size && "base offset already allocated");
 
     VBases.insert(std::make_pair(BaseDecl,
         ASTRecordLayout::VBaseInfo(BaseOffset, HasVtordisp)));

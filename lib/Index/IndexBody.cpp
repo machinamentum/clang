@@ -1,14 +1,14 @@
 //===- IndexBody.cpp - Indexing statements --------------------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
 #include "IndexingContext.h"
 #include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/AST/ASTLambda.h"
 
 using namespace clang;
 using namespace clang::index;
@@ -259,8 +259,24 @@ public:
 
       if (isDynamic(E)) {
         Roles |= (unsigned)SymbolRole::Dynamic;
-        if (auto *RecD = E->getReceiverInterface())
-          Relations.emplace_back((unsigned)SymbolRole::RelationReceivedBy, RecD);
+
+        auto addReceivers = [&](const ObjCObjectType *Ty) {
+          if (!Ty)
+            return;
+          if (const auto *clsD = Ty->getInterface()) {
+            Relations.emplace_back((unsigned)SymbolRole::RelationReceivedBy,
+                                   clsD);
+          }
+          for (const auto *protD : Ty->quals()) {
+            Relations.emplace_back((unsigned)SymbolRole::RelationReceivedBy,
+                                   protD);
+          }
+        };
+        QualType recT = E->getReceiverType();
+        if (const auto *Ptr = recT->getAs<ObjCObjectPointerType>())
+          addReceivers(Ptr->getObjectType());
+        else
+          addReceivers(recT->getAs<ObjCObjectType>());
       }
 
       return IndexCtx.handleReference(MD, E->getSelectorStartLoc(),
@@ -435,6 +451,16 @@ public:
         IndexCtx.handleReference(Component.getField(), Component.getEndLoc(),
                                  Parent, ParentDC, SymbolRoleSet(), {});
       // FIXME: Try to resolve dependent field references.
+    }
+    return true;
+  }
+
+  bool VisitParmVarDecl(ParmVarDecl* D) {
+    // Index the parameters of lambda expression.
+    if (IndexCtx.shouldIndexFunctionLocalSymbols()) {
+      const auto *DC = D->getDeclContext();
+      if (DC && isLambdaCallOperator(DC))
+        IndexCtx.handleDecl(D);
     }
     return true;
   }

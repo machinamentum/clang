@@ -1,9 +1,8 @@
 //===- ScopeInfo.h - Information about a semantic context -------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -31,6 +30,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/ADT/TinyPtrVector.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <algorithm>
@@ -201,6 +201,12 @@ public:
   /// The stack of currently active compound stamement scopes in the
   /// function.
   SmallVector<CompoundScopeInfo, 4> CompoundScopes;
+
+  /// The set of blocks that are introduced in this function.
+  llvm::SmallPtrSet<const BlockDecl *, 1> Blocks;
+
+  /// The set of __block variables that are introduced in this function.
+  llvm::TinyPtrVector<VarDecl *> ByrefBlockVars;
 
   /// A list of PartialDiagnostics created but delayed within the
   /// current function scope.  These diagnostics are vetted for reachability
@@ -424,6 +430,16 @@ public:
     return !HasDroppedStmt &&
         (HasIndirectGoto ||
           (HasBranchProtectedScope && HasBranchIntoScope));
+  }
+
+  // Add a block introduced in this function.
+  void addBlock(const BlockDecl *BD) {
+    Blocks.insert(BD);
+  }
+
+  // Add a __block variable introduced in this function.
+  void addByrefBlockVar(VarDecl *VD) {
+    ByrefBlockVars.push_back(VD);
   }
 
   bool isCoroutine() const { return !FirstCoroutineStmtLoc.isInvalid(); }

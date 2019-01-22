@@ -1,9 +1,8 @@
 //===--- ParseExpr.cpp - Expression Parsing -------------------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -315,6 +314,19 @@ Parser::ParseRHSOfBinaryExpression(ExprResult LHS, prec::Level MinPrec) {
       return LHS;
     }
 
+    // In Objective-C++, alternative operator tokens can be used as keyword args
+    // in message expressions. Unconsume the token so that it can reinterpreted
+    // as an identifier in ParseObjCMessageExpressionBody. i.e., we support:
+    //   [foo meth:0 and:0];
+    //   [foo not_eq];
+    if (getLangOpts().ObjC && getLangOpts().CPlusPlus &&
+        Tok.isOneOf(tok::colon, tok::r_square) &&
+        OpToken.getIdentifierInfo() != nullptr) {
+      PP.EnterToken(Tok);
+      Tok = OpToken;
+      return LHS;
+    }
+
     // Special case handling for the ternary operator.
     ExprResult TernaryMiddle(true);
     if (NextTokPrec == prec::Conditional) {
@@ -380,10 +392,11 @@ Parser::ParseRHSOfBinaryExpression(ExprResult LHS, prec::Level MinPrec) {
       }
     }
 
-    // Code completion for the right-hand side of an assignment expression
-    // goes through a special hook that takes the left-hand side into account.
-    if (Tok.is(tok::code_completion) && NextTokPrec == prec::Assignment) {
-      Actions.CodeCompleteAssignmentRHS(getCurScope(), LHS.get());
+    // Code completion for the right-hand side of a binary expression goes
+    // through a special hook that takes the left-hand side into account.
+    if (Tok.is(tok::code_completion)) {
+      Actions.CodeCompleteBinaryRHS(getCurScope(), LHS.get(),
+                                    OpToken.getKind());
       cutOffParsing();
       return ExprError();
     }
@@ -944,7 +957,7 @@ ExprResult Parser::ParseCastExpression(bool isUnaryExpression,
     SourceLocation ILoc = ConsumeToken();
 
     // Support 'Class.property' and 'super.property' notation.
-    if (getLangOpts().ObjC1 && Tok.is(tok::period) &&
+    if (getLangOpts().ObjC && Tok.is(tok::period) &&
         (Actions.getTypeName(II, ILoc, getCurScope()) ||
          // Allow the base to be 'super' if in an objc-method.
          (&II == Ident_super && getCurScope()->isInObjcMethodScope()))) {
@@ -974,7 +987,7 @@ ExprResult Parser::ParseCastExpression(bool isUnaryExpression,
     // the token sequence is ill-formed. However, if there's a ':' or ']' after
     // that identifier, this is probably a message send with a missing open
     // bracket. Treat it as such.
-    if (getLangOpts().ObjC1 && &II == Ident_super && !InMessageExpression &&
+    if (getLangOpts().ObjC && &II == Ident_super && !InMessageExpression &&
         getCurScope()->isInObjcMethodScope() &&
         ((Tok.is(tok::identifier) &&
          (NextToken().is(tok::colon) || NextToken().is(tok::r_square))) ||
@@ -989,7 +1002,7 @@ ExprResult Parser::ParseCastExpression(bool isUnaryExpression,
     // send that's missing the opening '['. Recovery
     // appropriately. Also take this path if we're performing code
     // completion after an Objective-C class name.
-    if (getLangOpts().ObjC1 &&
+    if (getLangOpts().ObjC &&
         ((Tok.is(tok::identifier) && !InMessageExpression) ||
          Tok.is(tok::code_completion))) {
       const Token& Next = NextToken();
@@ -1162,7 +1175,7 @@ ExprResult Parser::ParseCastExpression(bool isUnaryExpression,
   case tok::kw__Alignof:   // unary-expression: '_Alignof' '(' type-name ')'
     if (!getLangOpts().C11)
       Diag(Tok, diag::ext_c11_alignment) << Tok.getName();
-    // fallthrough
+    LLVM_FALLTHROUGH;
   case tok::kw_alignof:    // unary-expression: 'alignof' '(' type-id ')'
   case tok::kw___alignof:  // unary-expression: '__alignof' unary-expression
                            // unary-expression: '__alignof' '(' type-name ')'
@@ -1228,7 +1241,7 @@ ExprResult Parser::ParseCastExpression(bool isUnaryExpression,
                                            Ty.get(), nullptr);
       break;
     }
-    // Fall through
+    LLVM_FALLTHROUGH;
 
   case tok::annot_decltype:
   case tok::kw_char:
@@ -1416,7 +1429,7 @@ ExprResult Parser::ParseCastExpression(bool isUnaryExpression,
   }
   case tok::l_square:
     if (getLangOpts().CPlusPlus11) {
-      if (getLangOpts().ObjC1) {
+      if (getLangOpts().ObjC) {
         // C++11 lambda expressions and Objective-C message sends both start with a
         // square bracket.  There are three possibilities here:
         // we have a valid lambda expression, we have an invalid lambda
@@ -1430,11 +1443,11 @@ ExprResult Parser::ParseCastExpression(bool isUnaryExpression,
       Res = ParseLambdaExpression();
       break;
     }
-    if (getLangOpts().ObjC1) {
+    if (getLangOpts().ObjC) {
       Res = ParseObjCMessageExpression();
       break;
     }
-    // FALL THROUGH.
+    LLVM_FALLTHROUGH;
   default:
     NotCastExpr = true;
     return ExprError();
@@ -1498,7 +1511,7 @@ Parser::ParsePostfixExpressionSuffix(ExprResult LHS) {
       // If we see identifier: after an expression, and we're not already in a
       // message send, then this is probably a message send with a missing
       // opening bracket '['.
-      if (getLangOpts().ObjC1 && !InMessageExpression &&
+      if (getLangOpts().ObjC && !InMessageExpression &&
           (NextToken().is(tok::colon) || NextToken().is(tok::r_square))) {
         LHS = ParseObjCMessageExpressionBody(SourceLocation(), SourceLocation(),
                                              nullptr, LHS.get());
@@ -1516,7 +1529,7 @@ Parser::ParsePostfixExpressionSuffix(ExprResult LHS) {
       // actually another message send.  In this case, do some look-ahead to see
       // if the contents of the square brackets are obviously not a valid
       // expression and recover by pretending there is no suffix.
-      if (getLangOpts().ObjC1 && Tok.isAtStartOfLine() &&
+      if (getLangOpts().ObjC && Tok.isAtStartOfLine() &&
           isSimpleObjCMessageExpression())
         return LHS;
 
@@ -1637,7 +1650,10 @@ Parser::ParsePostfixExpressionSuffix(ExprResult LHS) {
       CommaLocsTy CommaLocs;
 
       if (Tok.is(tok::code_completion)) {
-        Actions.CodeCompleteCall(getCurScope(), LHS.get(), None);
+        QualType PreferredType = Actions.ProduceCallSignatureHelp(
+            getCurScope(), LHS.get(), None, PT.getOpenLocation());
+        CalledSignatureHelp = true;
+        Actions.CodeCompleteExpression(getCurScope(), PreferredType);
         cutOffParsing();
         return ExprError();
       }
@@ -1645,9 +1661,21 @@ Parser::ParsePostfixExpressionSuffix(ExprResult LHS) {
       if (OpKind == tok::l_paren || !LHS.isInvalid()) {
         if (Tok.isNot(tok::r_paren)) {
           if (ParseExpressionList(ArgExprs, CommaLocs, [&] {
-                Actions.CodeCompleteCall(getCurScope(), LHS.get(), ArgExprs);
-             })) {
+                QualType PreferredType = Actions.ProduceCallSignatureHelp(
+                    getCurScope(), LHS.get(), ArgExprs, PT.getOpenLocation());
+                CalledSignatureHelp = true;
+                Actions.CodeCompleteExpression(getCurScope(), PreferredType);
+              })) {
             (void)Actions.CorrectDelayedTyposInExpr(LHS);
+            // If we got an error when parsing expression list, we don't call
+            // the CodeCompleteCall handler inside the parser. So call it here
+            // to make sure we get overload suggestions even when we are in the
+            // middle of a parameter.
+            if (PP.isCodeCompletionReached() && !CalledSignatureHelp) {
+              Actions.ProduceCallSignatureHelp(getCurScope(), LHS.get(),
+                                               ArgExprs, PT.getOpenLocation());
+              CalledSignatureHelp = true;
+            }
             LHS = ExprError();
           } else if (LHS.isInvalid()) {
             for (auto &E : ArgExprs)
@@ -1738,6 +1766,8 @@ Parser::ParsePostfixExpressionSuffix(ExprResult LHS) {
 
         Expr *Base = LHS.get();
         Expr *CorrectedBase = CorrectedLHS.get();
+        if (!CorrectedBase && !getLangOpts().CPlusPlus)
+          CorrectedBase = Base;
 
         // Code completion for a member access expression.
         Actions.CodeCompleteMemberReferenceExpr(
@@ -1763,7 +1793,7 @@ Parser::ParsePostfixExpressionSuffix(ExprResult LHS) {
       // FIXME: Add support for explicit call of template constructor.
       SourceLocation TemplateKWLoc;
       UnqualifiedId Name;
-      if (getLangOpts().ObjC2 && OpKind == tok::period &&
+      if (getLangOpts().ObjC && OpKind == tok::period &&
           Tok.is(tok::kw_class)) {
         // Objective-C++:
         //   After a '.' in a member access expression, treat the keyword
@@ -1779,7 +1809,8 @@ Parser::ParsePostfixExpressionSuffix(ExprResult LHS) {
                                     /*EnteringContext=*/false,
                                     /*AllowDestructorName=*/true,
                                     /*AllowConstructorName=*/
-                                      getLangOpts().MicrosoftExt,
+                                    getLangOpts().MicrosoftExt &&
+                                        SS.isNotEmpty(),
                                     /*AllowDeductionGuide=*/false,
                                     ObjectType, &TemplateKWLoc, Name)) {
         (void)Actions.CorrectDelayedTyposInExpr(LHS);
@@ -1992,8 +2023,10 @@ ExprResult Parser::ParseUnaryExprOrTypeTraitExpression() {
                                                           CastRange);
 
   UnaryExprOrTypeTrait ExprKind = UETT_SizeOf;
-  if (OpTok.isOneOf(tok::kw_alignof, tok::kw___alignof, tok::kw__Alignof))
+  if (OpTok.isOneOf(tok::kw_alignof, tok::kw__Alignof))
     ExprKind = UETT_AlignOf;
+  else if (OpTok.is(tok::kw___alignof))
+    ExprKind = UETT_PreferredAlignOf;
   else if (OpTok.is(tok::kw_vec_step))
     ExprKind = UETT_VecStep;
   else if (OpTok.is(tok::kw___builtin_omp_required_simd_align))
@@ -2306,7 +2339,7 @@ Parser::ParseParenExpression(ParenParseOption &ExprType, bool stopIfCastExpr,
   }
 
   // Diagnose use of bridge casts in non-arc mode.
-  bool BridgeCast = (getLangOpts().ObjC2 &&
+  bool BridgeCast = (getLangOpts().ObjC &&
                      Tok.isOneOf(tok::kw___bridge,
                                  tok::kw___bridge_transfer,
                                  tok::kw___bridge_retained,
@@ -2416,7 +2449,7 @@ Parser::ParseParenExpression(ParenParseOption &ExprType, bool stopIfCastExpr,
     // this is probably an Objective-C message send where the leading '[' is
     // missing. Recover as if that were the case.
     if (!DeclaratorInfo.isInvalidType() && Tok.is(tok::identifier) &&
-        !InMessageExpression && getLangOpts().ObjC1 &&
+        !InMessageExpression && getLangOpts().ObjC &&
         (NextToken().is(tok::colon) || NextToken().is(tok::r_square))) {
       TypeResult Ty;
       {
@@ -2502,7 +2535,7 @@ Parser::ParseParenExpression(ParenParseOption &ExprType, bool stopIfCastExpr,
         }
 
         // Reject the cast of super idiom in ObjC.
-        if (Tok.is(tok::identifier) && getLangOpts().ObjC1 &&
+        if (Tok.is(tok::identifier) && getLangOpts().ObjC &&
             Tok.getIdentifierInfo() == Ident_super &&
             getCurScope()->isInObjcMethodScope() &&
             GetLookAheadToken(1).isNot(tok::period)) {
@@ -2978,12 +3011,8 @@ ExprResult Parser::ParseBlockLiteralExpression() {
                                      /*NumArgs=*/0,
                                      /*EllipsisLoc=*/NoLoc,
                                      /*RParenLoc=*/NoLoc,
-                                     /*TypeQuals=*/0,
                                      /*RefQualifierIsLvalueRef=*/true,
                                      /*RefQualifierLoc=*/NoLoc,
-                                     /*ConstQualifierLoc=*/NoLoc,
-                                     /*VolatileQualifierLoc=*/NoLoc,
-                                     /*RestrictQualifierLoc=*/NoLoc,
                                      /*MutableLoc=*/NoLoc, EST_None,
                                      /*ESpecRange=*/SourceRange(),
                                      /*Exceptions=*/nullptr,

@@ -1,9 +1,8 @@
 //===--- CGStmt.cpp - Emit LLVM Code from Statements ----------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -19,8 +18,6 @@
 #include "clang/Basic/Builtins.h"
 #include "clang/Basic/PrettyStackTrace.h"
 #include "clang/Basic/TargetInfo.h"
-#include "clang/Sema/LoopHint.h"
-#include "clang/Sema/SemaDiagnostic.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/CallSite.h"
 #include "llvm/IR/DataLayout.h"
@@ -932,6 +929,8 @@ CodeGenFunction::EmitCXXForRangeStmt(const CXXForRangeStmt &S,
   LexicalScope ForScope(*this, S.getSourceRange());
 
   // Evaluate the first pieces before the loop.
+  if (S.getInit())
+    EmitStmt(S.getInit());
   EmitStmt(S.getRangeStmt());
   EmitStmt(S.getBeginStmt());
   EmitStmt(S.getEndStmt());
@@ -1045,10 +1044,9 @@ void CodeGenFunction::EmitReturnStmt(const ReturnStmt &S) {
   // exception to our over-conservative rules about not jumping to
   // statements following block literals with non-trivial cleanups.
   RunCleanupsScope cleanupScope(*this);
-  if (const ExprWithCleanups *cleanups =
-        dyn_cast_or_null<ExprWithCleanups>(RV)) {
-    enterFullExpression(cleanups);
-    RV = cleanups->getSubExpr();
+  if (const FullExpr *fe = dyn_cast_or_null<FullExpr>(RV)) {
+    enterFullExpression(fe);
+    RV = fe->getSubExpr();
   }
 
   // FIXME: Clean this up by using an LValue for ReturnTemp,
@@ -1821,11 +1819,14 @@ llvm::Value* CodeGenFunction::EmitAsmInput(
   // If this can't be a register or memory, i.e., has to be a constant
   // (immediate or symbolic), try to emit it as such.
   if (!Info.allowsRegister() && !Info.allowsMemory()) {
-    llvm::APSInt Result;
+    if (Info.requiresImmediateConstant()) {
+      llvm::APSInt AsmConst = InputExpr->EvaluateKnownConstInt(getContext());
+      return llvm::ConstantInt::get(getLLVMContext(), AsmConst);
+    }
+
+    Expr::EvalResult Result;
     if (InputExpr->EvaluateAsInt(Result, getContext()))
-      return llvm::ConstantInt::get(getLLVMContext(), Result);
-    assert(!Info.requiresImmediateConstant() &&
-           "Required-immediate inlineasm arg isn't constant?");
+      return llvm::ConstantInt::get(getLLVMContext(), Result.Val.getInt());
   }
 
   if (Info.allowsRegister() || !Info.allowsMemory())
@@ -1979,6 +1980,11 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
                               diag::err_asm_invalid_type_in_input)
             << OutExpr->getType() << OutputConstraint;
       }
+
+      // Update largest vector width for any vector types.
+      if (auto *VT = dyn_cast<llvm::VectorType>(ResultRegTypes.back()))
+        LargestVectorWidth = std::max(LargestVectorWidth,
+                                      VT->getPrimitiveSizeInBits());
     } else {
       ArgTypes.push_back(Dest.getAddress().getType());
       Args.push_back(Dest.getPointer());
@@ -2000,6 +2006,10 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
                                                Arg->getType()))
         Arg = Builder.CreateBitCast(Arg, AdjTy);
 
+      // Update largest vector width for any vector types.
+      if (auto *VT = dyn_cast<llvm::VectorType>(Arg->getType()))
+        LargestVectorWidth = std::max(LargestVectorWidth,
+                                      VT->getPrimitiveSizeInBits());
       if (Info.allowsRegister())
         InOutConstraints += llvm::utostr(i);
       else
@@ -2079,6 +2089,11 @@ void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
     else
       CGM.getDiags().Report(S.getAsmLoc(), diag::err_asm_invalid_type_in_input)
           << InputExpr->getType() << InputConstraint;
+
+    // Update largest vector width for any vector types.
+    if (auto *VT = dyn_cast<llvm::VectorType>(Arg->getType()))
+      LargestVectorWidth = std::max(LargestVectorWidth,
+                                    VT->getPrimitiveSizeInBits());
 
     ArgTypes.push_back(Arg->getType());
     Args.push_back(Arg);

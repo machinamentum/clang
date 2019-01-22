@@ -1,9 +1,8 @@
 //===- CXTypes.cpp - Implements 'CXTypes' aspect of libclang ------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===--------------------------------------------------------------------===//
 //
@@ -70,6 +69,8 @@ static CXTypeKind GetBuiltinTypeKind(const BuiltinType *BT) {
 #define IMAGE_TYPE(ImgType, Id, SingletonId, Access, Suffix) BTCASE(Id);
 #include "clang/Basic/OpenCLImageTypes.def"
 #undef IMAGE_TYPE
+#define EXT_OPAQUE_TYPE(ExtType, Id, Ext) BTCASE(Id);
+#include "clang/Basic/OpenCLExtensionTypes.def"
     BTCASE(OCLSampler);
     BTCASE(OCLEvent);
     BTCASE(OCLQueue);
@@ -136,7 +137,7 @@ CXType cxtype::MakeCXType(QualType T, CXTranslationUnit TU) {
     }
 
     ASTContext &Ctx = cxtu::getASTUnit(TU)->getASTContext();
-    if (Ctx.getLangOpts().ObjC1) {
+    if (Ctx.getLangOpts().ObjC) {
       QualType UnqualT = T.getUnqualifiedType();
       if (Ctx.isObjCIdType(UnqualT))
         TK = CXType_ObjCId;
@@ -442,6 +443,7 @@ CXType clang_getPointeeType(CXType CT) {
   if (!TP)
     return MakeCXType(QualType(), GetTU(CT));
 
+try_again:
   switch (TP->getTypeClass()) {
     case Type::Pointer:
       T = cast<PointerType>(TP)->getPointeeType();
@@ -458,6 +460,12 @@ CXType clang_getPointeeType(CXType CT) {
       break;
     case Type::MemberPointer:
       T = cast<MemberPointerType>(TP)->getPointeeType();
+      break;
+    case Type::Auto:
+    case Type::DeducedTemplateSpecialization:
+      TP = cast<DeducedType>(TP)->getDeducedType().getTypePtrOrNull();
+      if (TP)
+        goto try_again;
       break;
     default:
       T = QualType();
@@ -598,6 +606,8 @@ CXString clang_getTypeKindSpelling(enum CXTypeKind K) {
 #define IMAGE_TYPE(ImgType, Id, SingletonId, Access, Suffix) TKIND(Id);
 #include "clang/Basic/OpenCLImageTypes.def"
 #undef IMAGE_TYPE
+#define EXT_OPAQUE_TYPE(ExtTYpe, Id, Ext) TKIND(Id);
+#include "clang/Basic/OpenCLExtensionTypes.def"
     TKIND(OCLSampler);
     TKIND(OCLEvent);
     TKIND(OCLQueue);
@@ -640,6 +650,7 @@ CXCallingConv clang_getFunctionTypeCallingConv(CXType X) {
       TCALLINGCONV(X86Pascal);
       TCALLINGCONV(X86RegCall);
       TCALLINGCONV(X86VectorCall);
+      TCALLINGCONV(AArch64VectorCall);
       TCALLINGCONV(Win64);
       TCALLINGCONV(X86_64SysV);
       TCALLINGCONV(AAPCS);
@@ -1217,11 +1228,15 @@ unsigned clang_Cursor_isAnonymous(CXCursor C){
   if (!clang_isDeclaration(C.kind))
     return 0;
   const Decl *D = cxcursor::getCursorDecl(C);
-  if (const RecordDecl *FD = dyn_cast_or_null<RecordDecl>(D))
-    return FD->isAnonymousStructOrUnion();
+  if (const NamespaceDecl *ND = dyn_cast_or_null<NamespaceDecl>(D)) {
+    return ND->isAnonymousNamespace();
+  } else if (const TagDecl *TD = dyn_cast_or_null<TagDecl>(D)) {
+    return TD->getTypedefNameForAnonDecl() == nullptr &&
+           TD->getIdentifier() == nullptr;
+  }
+
   return 0;
 }
-
 CXType clang_Type_getNamedType(CXType CT){
   QualType T = GetQualType(CT);
   const Type *TP = T.getTypePtrOrNull();

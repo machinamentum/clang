@@ -1,9 +1,8 @@
 //===- DeclObjC.h - Classes for representing declarations -------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -280,15 +279,7 @@ public:
   SourceLocation getDeclaratorEndLoc() const { return DeclEndLoc; }
 
   // Location information, modeled after the Stmt API.
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocStart() const LLVM_READONLY,
-                            "Use getBeginLoc instead") {
-    return getBeginLoc();
-  }
   SourceLocation getBeginLoc() const LLVM_READONLY { return getLocation(); }
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocEnd() const LLVM_READONLY,
-                            "Use getEndLoc instead") {
-    return getEndLoc();
-  }
   SourceLocation getEndLoc() const LLVM_READONLY;
   SourceRange getSourceRange() const override LLVM_READONLY {
     return SourceRange(getLocation(), getEndLoc());
@@ -375,6 +366,14 @@ public:
   ArrayRef<ParmVarDecl*> parameters() const {
     return llvm::makeArrayRef(const_cast<ParmVarDecl**>(getParams()),
                               NumParams);
+  }
+
+  ParmVarDecl *getParamDecl(unsigned Idx) {
+    assert(Idx < NumParams && "Index out of bounds!");
+    return getParams()[Idx];
+  }
+  const ParmVarDecl *getParamDecl(unsigned Idx) const {
+    return const_cast<ObjCMethodDecl *>(this)->getParamDecl(Idx);
   }
 
   /// Sets the method's parameters and selector source locations.
@@ -513,6 +512,9 @@ public:
 
   /// Returns whether this specific method is a definition.
   bool isThisDeclarationADefinition() const { return hasBody(); }
+
+  /// Is this method defined in the NSObject base class?
+  bool definedInNSObject(const ASTContext &) const;
 
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
@@ -2809,10 +2811,6 @@ public:
 
   SourceRange getSourceRange() const override LLVM_READONLY;
 
-  LLVM_ATTRIBUTE_DEPRECATED(SourceLocation getLocStart() const LLVM_READONLY,
-                            "Use getBeginLoc instead") {
-    return getBeginLoc();
-  }
   SourceLocation getBeginLoc() const LLVM_READONLY { return AtLoc; }
   void setAtLoc(SourceLocation Loc) { AtLoc = Loc; }
 

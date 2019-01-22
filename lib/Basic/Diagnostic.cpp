@@ -1,9 +1,8 @@
 //===- Diagnostic.cpp - C Language Family Diagnostic Handling -------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -87,6 +86,14 @@ DiagnosticsEngine::~DiagnosticsEngine() {
   // If we own the diagnostic client, destroy it first so that it can access the
   // engine from its destructor.
   setClient(nullptr);
+}
+
+void DiagnosticsEngine::dump() const {
+  DiagStatesByLoc.dump(*SourceMgr);
+}
+
+void DiagnosticsEngine::dump(StringRef DiagName) const {
+  DiagStatesByLoc.dump(*SourceMgr, DiagName);
 }
 
 void DiagnosticsEngine::setClient(DiagnosticConsumer *client,
@@ -239,7 +246,7 @@ DiagnosticsEngine::DiagStateMap::getFile(SourceManager &SrcMgr,
 void DiagnosticsEngine::DiagStateMap::dump(SourceManager &SrcMgr,
                                            StringRef DiagName) const {
   llvm::errs() << "diagnostic state at ";
-  CurDiagStateLoc.dump(SrcMgr);
+  CurDiagStateLoc.print(llvm::errs(), SrcMgr);
   llvm::errs() << ": " << CurDiagState << "\n";
 
   for (auto &F : Files) {
@@ -261,7 +268,7 @@ void DiagnosticsEngine::DiagStateMap::dump(SourceManager &SrcMgr,
                      << Decomp.first.getHashValue() << "> ";
         SrcMgr.getLocForStartOfFile(Decomp.first)
               .getLocWithOffset(Decomp.second)
-              .dump(SrcMgr);
+              .print(llvm::errs(), SrcMgr);
       }
       if (File.HasLocalTransitions)
         llvm::errs() << " has_local_transitions";
@@ -281,7 +288,7 @@ void DiagnosticsEngine::DiagStateMap::dump(SourceManager &SrcMgr,
         llvm::errs() << "  ";
         SrcMgr.getLocForStartOfFile(ID)
               .getLocWithOffset(Transition.Offset)
-              .dump(SrcMgr);
+              .print(llvm::errs(), SrcMgr);
         llvm::errs() << ": state " << Transition.State << ":\n";
       };
 
@@ -975,6 +982,7 @@ FormatDiagnostic(const char *DiagStr, const char *DiagEnd,
       llvm::raw_svector_ostream(OutStr) << '\'' << II->getName() << '\'';
       break;
     }
+    case DiagnosticsEngine::ak_qual:
     case DiagnosticsEngine::ak_qualtype:
     case DiagnosticsEngine::ak_declarationname:
     case DiagnosticsEngine::ak_nameddecl:

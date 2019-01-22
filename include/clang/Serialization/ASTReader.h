@@ -1,9 +1,8 @@
 //===- ASTReader.h - AST File Reader ----------------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -18,6 +17,7 @@
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/DeclarationName.h"
 #include "clang/AST/NestedNameSpecifier.h"
+#include "clang/AST/OpenMPClause.h"
 #include "clang/AST/TemplateBase.h"
 #include "clang/AST/TemplateName.h"
 #include "clang/AST/Type.h"
@@ -232,7 +232,7 @@ public:
 
   /// If needsImportVisitation returns \c true, this is called for each
   /// AST file imported by this AST file.
-  virtual void visitImport(StringRef Filename) {}
+  virtual void visitImport(StringRef ModuleName, StringRef Filename) {}
 
   /// Indicates that a particular module file extension has been read.
   virtual void readModuleFileExtension(
@@ -2245,6 +2245,9 @@ public:
   CXXTemporary *ReadCXXTemporary(ModuleFile &F, const RecordData &Record,
                                  unsigned &Idx);
 
+  /// Reads one attribute from the current stream position.
+  Attr *ReadAttr(ModuleFile &M, const RecordData &Record, unsigned &Idx);
+
   /// Reads attributes from the current stream position.
   void ReadAttributes(ASTRecordReader &Record, AttrVec &Attrs);
 
@@ -2630,6 +2633,11 @@ public:
     return ASTReader::ReadVersionTuple(Record, Idx);
   }
 
+  /// Reads one attribute from the current stream position, advancing Idx.
+  Attr *readAttr() {
+    return Reader->ReadAttr(*F, Record, Idx);
+  }
+
   /// Reads attributes from the current stream position, advancing Idx.
   void readAttributes(AttrVec &Attrs) {
     return Reader->ReadAttributes(*this, Attrs);
@@ -2668,6 +2676,21 @@ private:
 inline void PCHValidator::Error(const char *Msg) {
   Reader.Error(Msg);
 }
+
+class OMPClauseReader : public OMPClauseVisitor<OMPClauseReader> {
+  ASTRecordReader &Record;
+  ASTContext &Context;
+
+public:
+  OMPClauseReader(ASTRecordReader &Record)
+      : Record(Record), Context(Record.getContext()) {}
+
+#define OPENMP_CLAUSE(Name, Class) void Visit##Class(Class *C);
+#include "clang/Basic/OpenMPKinds.def"
+  OMPClause *readClause();
+  void VisitOMPClauseWithPreInit(OMPClauseWithPreInit *C);
+  void VisitOMPClauseWithPostUpdate(OMPClauseWithPostUpdate *C);
+};
 
 } // namespace clang
 

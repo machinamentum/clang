@@ -1,9 +1,8 @@
 //===--- SemaExprObjC.cpp - Semantic Analysis for ObjC Expressions --------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -1227,8 +1226,12 @@ ExprResult Sema::ParseObjCProtocolExpression(IdentifierInfo *ProtocolId,
     Diag(ProtoLoc, diag::err_undeclared_protocol) << ProtocolId;
     return true;
   }
-  if (PDecl->hasDefinition())
+  if (!PDecl->hasDefinition()) {
+    Diag(ProtoLoc, diag::err_atprotocol_protocol) << PDecl;
+    Diag(PDecl->getLocation(), diag::note_entity_declared_at) << PDecl;
+  } else {
     PDecl = PDecl->getDefinition();
+  }
 
   QualType Ty = Context.getObjCProtoType();
   if (Ty.isNull())
@@ -1342,7 +1345,8 @@ static QualType getBaseMessageSendResultType(Sema &S,
   return transferNullability(ReceiverType);
 }
 
-QualType Sema::getMessageSendResultType(QualType ReceiverType,
+QualType Sema::getMessageSendResultType(const Expr *Receiver,
+                                        QualType ReceiverType,
                                         ObjCMethodDecl *Method,
                                         bool isClassMessage,
                                         bool isSuperMessage) {
@@ -1353,8 +1357,33 @@ QualType Sema::getMessageSendResultType(QualType ReceiverType,
                                                      isSuperMessage);
 
   // If this is a class message, ignore the nullability of the receiver.
-  if (isClassMessage)
+  if (isClassMessage) {
+    // In a class method, class messages to 'self' that return instancetype can
+    // be typed as the current class.  We can safely do this in ARC because self
+    // can't be reassigned, and we do it unsafely outside of ARC because in
+    // practice people never reassign self in class methods and there's some
+    // virtue in not being aggressively pedantic.
+    if (Receiver && Receiver->isObjCSelfExpr()) {
+      assert(ReceiverType->isObjCClassType() && "expected a Class self");
+      QualType T = Method->getSendResultType(ReceiverType);
+      AttributedType::stripOuterNullability(T);
+      if (T == Context.getObjCInstanceType()) {
+        const ObjCMethodDecl *MD = cast<ObjCMethodDecl>(
+            cast<ImplicitParamDecl>(
+                cast<DeclRefExpr>(Receiver->IgnoreParenImpCasts())->getDecl())
+                ->getDeclContext());
+        assert(MD->isClassMethod() && "expected a class method");
+        QualType NewResultType = Context.getObjCObjectPointerType(
+            Context.getObjCInterfaceType(MD->getClassInterface()));
+        if (auto Nullability = resultType->getNullability(Context))
+          NewResultType = Context.getAttributedType(
+              AttributedType::getNullabilityAttrKind(*Nullability),
+              NewResultType, NewResultType);
+        return NewResultType;
+      }
+    }
     return resultType;
+  }
 
   // There is nothing left to do if the result type cannot have a nullability
   // specifier.
@@ -1501,15 +1530,12 @@ void Sema::EmitRelatedResultTypeNote(const Expr *E) {
     << MsgSend->getType();
 }
 
-bool Sema::CheckMessageArgumentTypes(QualType ReceiverType,
-                                     MultiExprArg Args,
-                                     Selector Sel,
-                                     ArrayRef<SourceLocation> SelectorLocs,
-                                     ObjCMethodDecl *Method,
-                                     bool isClassMessage, bool isSuperMessage,
-                                     SourceLocation lbrac, SourceLocation rbrac,
-                                     SourceRange RecRange,
-                                     QualType &ReturnType, ExprValueKind &VK) {
+bool Sema::CheckMessageArgumentTypes(
+    const Expr *Receiver, QualType ReceiverType, MultiExprArg Args,
+    Selector Sel, ArrayRef<SourceLocation> SelectorLocs, ObjCMethodDecl *Method,
+    bool isClassMessage, bool isSuperMessage, SourceLocation lbrac,
+    SourceLocation rbrac, SourceRange RecRange, QualType &ReturnType,
+    ExprValueKind &VK) {
   SourceLocation SelLoc;
   if (!SelectorLocs.empty() && SelectorLocs.front().isValid())
     SelLoc = SelectorLocs.front();
@@ -1586,8 +1612,8 @@ bool Sema::CheckMessageArgumentTypes(QualType ReceiverType,
     return false;
   }
 
-  ReturnType = getMessageSendResultType(ReceiverType, Method, isClassMessage,
-                                        isSuperMessage);
+  ReturnType = getMessageSendResultType(Receiver, ReceiverType, Method,
+                                        isClassMessage, isSuperMessage);
   VK = Expr::getValueKindForType(Method->getReturnType());
 
   unsigned NumNamedArgs = Sel.getNumArgs();
@@ -2467,7 +2493,8 @@ ExprResult Sema::BuildClassMessage(TypeSourceInfo *ReceiverTypeInfo,
     if (!Method)
       Method = Class->lookupPrivateClassMethod(Sel);
 
-    if (Method && DiagnoseUseOfDecl(Method, SelectorSlotLocs))
+    if (Method && DiagnoseUseOfDecl(Method, SelectorSlotLocs,
+                                    nullptr, false, false, Class))
       return ExprError();
   }
 
@@ -2477,12 +2504,10 @@ ExprResult Sema::BuildClassMessage(TypeSourceInfo *ReceiverTypeInfo,
 
   unsigned NumArgs = ArgsIn.size();
   Expr **Args = ArgsIn.data();
-  if (CheckMessageArgumentTypes(ReceiverType, MultiExprArg(Args, NumArgs),
-                                Sel, SelectorLocs,
-                                Method, true,
-                                SuperLoc.isValid(), LBracLoc, RBracLoc,
-                                SourceRange(),
-                                ReturnType, VK))
+  if (CheckMessageArgumentTypes(/*Receiver=*/nullptr, ReceiverType,
+                                MultiExprArg(Args, NumArgs), Sel, SelectorLocs,
+                                Method, true, SuperLoc.isValid(), LBracLoc,
+                                RBracLoc, SourceRange(), ReturnType, VK))
     return ExprError();
 
   if (Method && !Method->getReturnType()->isVoidType() &&
@@ -2780,14 +2805,19 @@ ExprResult Sema::BuildInstanceMessage(Expr *Receiver,
       } else {
         if (ObjCMethodDecl *CurMeth = getCurMethodDecl()) {
           if (ObjCInterfaceDecl *ClassDecl = CurMeth->getClassInterface()) {
+            // FIXME: Is this correct? Why are we assuming that a message to
+            // Class will call a method in the current interface?
+
             // First check the public methods in the class interface.
             Method = ClassDecl->lookupClassMethod(Sel);
 
             if (!Method)
               Method = ClassDecl->lookupPrivateClassMethod(Sel);
+
+            if (Method && DiagnoseUseOfDecl(Method, SelectorSlotLocs, nullptr,
+                                            false, false, ClassDecl))
+              return ExprError();
           }
-          if (Method && DiagnoseUseOfDecl(Method, SelectorSlotLocs))
-            return ExprError();
         }
         if (!Method) {
           // If not messaging 'self', look for any factory method named 'Sel'.
@@ -2972,9 +3002,9 @@ ExprResult Sema::BuildInstanceMessage(Expr *Receiver,
   ExprValueKind VK = VK_RValue;
   bool ClassMessage = (ReceiverType->isObjCClassType() ||
                        ReceiverType->isObjCQualifiedClassType());
-  if (CheckMessageArgumentTypes(ReceiverType, MultiExprArg(Args, NumArgs),
-                                Sel, SelectorLocs, Method,
-                                ClassMessage, SuperLoc.isValid(),
+  if (CheckMessageArgumentTypes(Receiver, ReceiverType,
+                                MultiExprArg(Args, NumArgs), Sel, SelectorLocs,
+                                Method, ClassMessage, SuperLoc.isValid(),
                                 LBracLoc, RBracLoc, RecRange, ReturnType, VK))
     return ExprError();
 
@@ -3130,7 +3160,7 @@ ExprResult Sema::BuildInstanceMessage(Expr *Receiver,
           Prop->getPropertyAttributes() & ObjCPropertyDecl::OBJC_PR_weak;
         if (!IsWeak && Sel.isUnarySelector())
           IsWeak = ReturnType.getObjCLifetime() & Qualifiers::OCL_Weak;
-        if (IsWeak &&
+        if (IsWeak && !isUnevaluatedContext() &&
             !Diags.isIgnored(diag::warn_arc_repeated_use_of_weak, LBracLoc))
           getCurFunction()->recordUseOfWeak(Result, Prop);
       }
@@ -3882,7 +3912,7 @@ static bool CheckObjCBridgeCFCast(Sema &S, QualType castType, Expr *castExpr,
 }
 
 void Sema::CheckTollFreeBridgeCast(QualType castType, Expr *castExpr) {
-  if (!getLangOpts().ObjC1)
+  if (!getLangOpts().ObjC)
     return;
   // warn in presence of __bridge casting to or from a toll free bridge cast.
   ARCConversionTypeClass exprACTC = classifyTypeForARCConversion(castExpr->getType());
@@ -3954,7 +3984,7 @@ void Sema::CheckObjCBridgeRelatedCast(QualType castType, Expr *castExpr) {
 
 bool Sema::CheckTollFreeBridgeStaticCast(QualType castType, Expr *castExpr,
                                          CastKind &Kind) {
-  if (!getLangOpts().ObjC1)
+  if (!getLangOpts().ObjC)
     return false;
   ARCConversionTypeClass exprACTC =
     classifyTypeForARCConversion(castExpr->getType());

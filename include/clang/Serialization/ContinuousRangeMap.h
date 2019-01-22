@@ -1,9 +1,8 @@
 //===- ContinuousRangeMap.h - Map with int range as key ---------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -118,7 +117,7 @@ public:
     Builder &operator=(const Builder&) = delete;
 
     ~Builder() {
-      llvm::sort(Self.Rep.begin(), Self.Rep.end(), Compare());
+      llvm::sort(Self.Rep, Compare());
       std::unique(Self.Rep.begin(), Self.Rep.end(),
                   [](const_reference A, const_reference B) {
         // FIXME: we should not allow any duplicate keys, but there are a lot of

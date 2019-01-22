@@ -1,9 +1,8 @@
 //===-- core_main.cpp - Core Index Tool testbed ---------------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -74,6 +73,7 @@ static cl::opt<std::string>
 static void printSymbolInfo(SymbolInfo SymInfo, raw_ostream &OS);
 static void printSymbolNameAndUSR(const Decl *D, ASTContext &Ctx,
                                   raw_ostream &OS);
+static void printSymbolNameAndUSR(const clang::Module *Mod, raw_ostream &OS);
 
 namespace {
 
@@ -132,8 +132,9 @@ public:
     return true;
   }
 
-  bool handleModuleOccurence(const ImportDecl *ImportD, SymbolRoleSet Roles,
-                             SourceLocation Loc) override {
+  bool handleModuleOccurence(const ImportDecl *ImportD,
+                             const clang::Module *Mod,
+                             SymbolRoleSet Roles, SourceLocation Loc) override {
     ASTContext &Ctx = ImportD->getASTContext();
     SourceManager &SM = Ctx.getSourceManager();
 
@@ -146,7 +147,8 @@ public:
     printSymbolInfo(getSymbolInfo(ImportD), OS);
     OS << " | ";
 
-    OS << ImportD->getImportedModule()->getFullModuleName() << " | ";
+    printSymbolNameAndUSR(Mod, OS);
+    OS << " | ";
 
     printSymbolRoles(Roles, OS);
     OS << " |\n";
@@ -306,6 +308,12 @@ static void printSymbolNameAndUSR(const Decl *D, ASTContext &Ctx,
   } else {
     OS << USRBuf;
   }
+}
+
+static void printSymbolNameAndUSR(const clang::Module *Mod, raw_ostream &OS) {
+  assert(Mod);
+  OS << Mod->getFullModuleName() << " | ";
+  generateFullUSRForModule(Mod, OS);
 }
 
 //===----------------------------------------------------------------------===//

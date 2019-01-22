@@ -1,9 +1,8 @@
 //===- ASTReaderDecl.cpp - Decl Deserialization ---------------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -30,6 +29,7 @@
 #include "clang/AST/ExternalASTSource.h"
 #include "clang/AST/LambdaCapture.h"
 #include "clang/AST/NestedNameSpecifier.h"
+#include "clang/AST/OpenMPClause.h"
 #include "clang/AST/Redeclarable.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/TemplateBase.h"
@@ -47,7 +47,6 @@
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/Specifiers.h"
 #include "clang/Sema/IdentifierResolver.h"
-#include "clang/Sema/SemaDiagnostic.h"
 #include "clang/Serialization/ASTBitCodes.h"
 #include "clang/Serialization/ASTReader.h"
 #include "clang/Serialization/ContinuousRangeMap.h"
@@ -274,7 +273,7 @@ namespace clang {
 
       if (auto &Old = LazySpecializations) {
         IDs.insert(IDs.end(), Old + 1, Old + 1 + Old[0]);
-        llvm::sort(IDs.begin(), IDs.end());
+        llvm::sort(IDs);
         IDs.erase(std::unique(IDs.begin(), IDs.end()), IDs.end());
       }
 
@@ -446,6 +445,7 @@ namespace clang {
     void VisitObjCPropertyImplDecl(ObjCPropertyImplDecl *D);
     void VisitOMPThreadPrivateDecl(OMPThreadPrivateDecl *D);
     void VisitOMPDeclareReductionDecl(OMPDeclareReductionDecl *D);
+    void VisitOMPRequiresDecl(OMPRequiresDecl *D);
     void VisitOMPCapturedExprDecl(OMPCapturedExprDecl *D);
   };
 
@@ -1349,6 +1349,7 @@ ASTDeclReader::RedeclarableResult ASTDeclReader::VisitVarDeclImpl(VarDecl *VD) {
   VD->VarDeclBits.SClass = (StorageClass)Record.readInt();
   VD->VarDeclBits.TSCSpec = Record.readInt();
   VD->VarDeclBits.InitStyle = Record.readInt();
+  VD->VarDeclBits.ARCPseudoStrong = Record.readInt();
   if (!isa<ParmVarDecl>(VD)) {
     VD->NonParmVarDeclBits.IsThisDeclarationADemotedDefinition =
         Record.readInt();
@@ -1356,13 +1357,13 @@ ASTDeclReader::RedeclarableResult ASTDeclReader::VisitVarDeclImpl(VarDecl *VD) {
     VD->NonParmVarDeclBits.NRVOVariable = Record.readInt();
     VD->NonParmVarDeclBits.CXXForRangeDecl = Record.readInt();
     VD->NonParmVarDeclBits.ObjCForDecl = Record.readInt();
-    VD->NonParmVarDeclBits.ARCPseudoStrong = Record.readInt();
     VD->NonParmVarDeclBits.IsInline = Record.readInt();
     VD->NonParmVarDeclBits.IsInlineSpecified = Record.readInt();
     VD->NonParmVarDeclBits.IsConstexpr = Record.readInt();
     VD->NonParmVarDeclBits.IsInitCapture = Record.readInt();
     VD->NonParmVarDeclBits.PreviousDeclInSameBlockScope = Record.readInt();
     VD->NonParmVarDeclBits.ImplicitParamKind = Record.readInt();
+    VD->NonParmVarDeclBits.EscapingByref = Record.readInt();
   }
   auto VarLinkage = Linkage(Record.readInt());
   VD->setCachedLinkage(VarLinkage);
@@ -2630,13 +2631,31 @@ void ASTDeclReader::VisitOMPThreadPrivateDecl(OMPThreadPrivateDecl *D) {
   D->setVars(Vars);
 }
 
+void ASTDeclReader::VisitOMPRequiresDecl(OMPRequiresDecl * D) {
+  VisitDecl(D);
+  unsigned NumClauses = D->clauselist_size();
+  SmallVector<OMPClause *, 8> Clauses;
+  Clauses.reserve(NumClauses);
+  OMPClauseReader ClauseReader(Record);
+  for (unsigned I = 0; I != NumClauses; ++I)
+    Clauses.push_back(ClauseReader.readClause());
+  D->setClauses(Clauses);
+}
+
 void ASTDeclReader::VisitOMPDeclareReductionDecl(OMPDeclareReductionDecl *D) {
   VisitValueDecl(D);
   D->setLocation(ReadSourceLocation());
-  D->setCombiner(Record.readExpr());
-  D->setInitializer(
-      Record.readExpr(),
-      static_cast<OMPDeclareReductionDecl::InitKind>(Record.readInt()));
+  Expr *In = Record.readExpr();
+  Expr *Out = Record.readExpr();
+  D->setCombinerData(In, Out);
+  Expr *Combiner = Record.readExpr();
+  D->setCombiner(Combiner);
+  Expr *Orig = Record.readExpr();
+  Expr *Priv = Record.readExpr();
+  D->setInitializerData(Orig, Priv);
+  Expr *Init = Record.readExpr();
+  auto IK = static_cast<OMPDeclareReductionDecl::InitKind>(Record.readInt());
+  D->setInitializer(Init, IK);
   D->PrevDeclInScope = ReadDeclID();
 }
 
@@ -2648,19 +2667,72 @@ void ASTDeclReader::VisitOMPCapturedExprDecl(OMPCapturedExprDecl *D) {
 // Attribute Reading
 //===----------------------------------------------------------------------===//
 
-/// Reads attributes from the current stream position.
-void ASTReader::ReadAttributes(ASTRecordReader &Record, AttrVec &Attrs) {
-  for (unsigned i = 0, e = Record.readInt(); i != e; ++i) {
-    Attr *New = nullptr;
-    auto Kind = (attr::Kind)Record.readInt();
-    SourceRange Range = Record.readSourceRange();
-    ASTContext &Context = getContext();
+namespace {
+class AttrReader {
+  ModuleFile *F;
+  ASTReader *Reader;
+  const ASTReader::RecordData &Record;
+  unsigned &Idx;
+
+public:
+  AttrReader(ModuleFile &F, ASTReader &Reader,
+             const ASTReader::RecordData &Record, unsigned &Idx)
+      : F(&F), Reader(&Reader), Record(Record), Idx(Idx) {}
+
+  const uint64_t &readInt() { return Record[Idx++]; }
+
+  SourceRange readSourceRange() {
+    return Reader->ReadSourceRange(*F, Record, Idx);
+  }
+
+  Expr *readExpr() { return Reader->ReadExpr(*F); }
+
+  std::string readString() {
+    return Reader->ReadString(Record, Idx);
+  }
+
+  TypeSourceInfo *getTypeSourceInfo() {
+    return Reader->GetTypeSourceInfo(*F, Record, Idx);
+  }
+
+  IdentifierInfo *getIdentifierInfo() {
+    return Reader->GetIdentifierInfo(*F, Record, Idx);
+  }
+
+  VersionTuple readVersionTuple() {
+    return ASTReader::ReadVersionTuple(Record, Idx);
+  }
+
+  template <typename T> T *GetLocalDeclAs(uint32_t LocalID) {
+    return cast_or_null<T>(Reader->GetLocalDecl(*F, LocalID));
+  }
+};
+}
+
+Attr *ASTReader::ReadAttr(ModuleFile &M, const RecordData &Rec,
+                          unsigned &Idx) {
+  AttrReader Record(M, *this, Rec, Idx);
+  auto V = Record.readInt();
+  if (!V)
+    return nullptr;
+
+  Attr *New = nullptr;
+  // Kind is stored as a 1-based integer because 0 is used to indicate a null
+  // Attr pointer.
+  auto Kind = static_cast<attr::Kind>(V - 1);
+  SourceRange Range = Record.readSourceRange();
+  ASTContext &Context = getContext();
 
 #include "clang/Serialization/AttrPCHRead.inc"
 
-    assert(New && "Unable to decode attribute?");
-    Attrs.push_back(New);
-  }
+  assert(New && "Unable to decode attribute?");
+  return New;
+}
+
+/// Reads attributes from the current stream position.
+void ASTReader::ReadAttributes(ASTRecordReader &Record, AttrVec &Attrs) {
+  for (unsigned I = 0, E = Record.readInt(); I != E; ++I)
+    Attrs.push_back(Record.readAttr());
 }
 
 //===----------------------------------------------------------------------===//
@@ -2708,7 +2780,8 @@ static bool isConsumerInterestedIn(ASTContext &Ctx, Decl *D, bool HasBody) {
     return !D->getDeclContext()->isFunctionOrMethod();
   if (const auto *Var = dyn_cast<VarDecl>(D))
     return Var->isFileVarDecl() &&
-           Var->isThisDeclarationADefinition() == VarDecl::Definition;
+           (Var->isThisDeclarationADefinition() == VarDecl::Definition ||
+            OMPDeclareTargetDeclAttr::isDeclareTargetDeclaration(Var));
   if (const auto *Func = dyn_cast<FunctionDecl>(D))
     return Func->doesThisDeclarationHaveABody() || HasBody;
 
@@ -2838,25 +2911,30 @@ static bool hasSameOverloadableAttrs(const FunctionDecl *A,
   // Note that pass_object_size attributes are represented in the function's
   // ExtParameterInfo, so we don't need to check them here.
 
-  // Return false if any of the enable_if expressions of A and B are different.
   llvm::FoldingSetNodeID Cand1ID, Cand2ID;
   auto AEnableIfAttrs = A->specific_attrs<EnableIfAttr>();
   auto BEnableIfAttrs = B->specific_attrs<EnableIfAttr>();
-  auto AEnableIf = AEnableIfAttrs.begin();
-  auto BEnableIf = BEnableIfAttrs.begin();
-  for (; AEnableIf != AEnableIfAttrs.end() && BEnableIf != BEnableIfAttrs.end();
-       ++BEnableIf, ++AEnableIf) {
+
+  for (auto Pair : zip_longest(AEnableIfAttrs, BEnableIfAttrs)) {
+    Optional<EnableIfAttr *> Cand1A = std::get<0>(Pair);
+    Optional<EnableIfAttr *> Cand2A = std::get<1>(Pair);
+
+    // Return false if the number of enable_if attributes is different.
+    if (!Cand1A || !Cand2A)
+      return false;
+
     Cand1ID.clear();
     Cand2ID.clear();
 
-    AEnableIf->getCond()->Profile(Cand1ID, A->getASTContext(), true);
-    BEnableIf->getCond()->Profile(Cand2ID, B->getASTContext(), true);
+    (*Cand1A)->getCond()->Profile(Cand1ID, A->getASTContext(), true);
+    (*Cand2A)->getCond()->Profile(Cand2ID, B->getASTContext(), true);
+
+    // Return false if any of the enable_if expressions of A and B are
+    // different.
     if (Cand1ID != Cand2ID)
       return false;
   }
-
-  // Return false if the number of enable_if attributes was different.
-  return AEnableIf == AEnableIfAttrs.end() && BEnableIf == BEnableIfAttrs.end();
+  return true;
 }
 
 /// Determine whether the two declarations refer to the same entity.
@@ -3769,6 +3847,9 @@ Decl *ASTReader::ReadDeclRecord(DeclID ID) {
   case DECL_OMP_THREADPRIVATE:
     D = OMPThreadPrivateDecl::CreateDeserialized(Context, ID, Record.readInt());
     break;
+  case DECL_OMP_REQUIRES:
+    D = OMPRequiresDecl::CreateDeserialized(Context, ID, Record.readInt());
+    break;
   case DECL_OMP_DECLARE_REDUCTION:
     D = OMPDeclareReductionDecl::CreateDeserialized(Context, ID);
     break;
@@ -4365,26 +4446,19 @@ void ASTDeclReader::UpdateDecl(Decl *D,
     case UPD_DECL_EXPORTED: {
       unsigned SubmoduleID = readSubmoduleID();
       auto *Exported = cast<NamedDecl>(D);
-      if (auto *TD = dyn_cast<TagDecl>(Exported))
-        Exported = TD->getDefinition();
       Module *Owner = SubmoduleID ? Reader.getSubmodule(SubmoduleID) : nullptr;
-      if (Reader.getContext().getLangOpts().ModulesLocalVisibility) {
-        Reader.getContext().mergeDefinitionIntoModule(cast<NamedDecl>(Exported),
-                                                      Owner);
-        Reader.PendingMergedDefinitionsToDeduplicate.insert(
-            cast<NamedDecl>(Exported));
-      } else if (Owner && Owner->NameVisibility != Module::AllVisible) {
-        // If Owner is made visible at some later point, make this declaration
-        // visible too.
-        Reader.HiddenNamesMap[Owner].push_back(Exported);
-      } else {
-        // The declaration is now visible.
-        Exported->setVisibleDespiteOwningModule();
-      }
+      Reader.getContext().mergeDefinitionIntoModule(Exported, Owner);
+      Reader.PendingMergedDefinitionsToDeduplicate.insert(Exported);
       break;
     }
 
     case UPD_DECL_MARKED_OPENMP_DECLARETARGET:
+      D->addAttr(OMPDeclareTargetDeclAttr::CreateImplicit(
+          Reader.getContext(),
+          static_cast<OMPDeclareTargetDeclAttr::MapTypeTy>(Record.readInt()),
+          ReadSourceRange()));
+      break;
+
     case UPD_ADDED_ATTR_TO_RECORD:
       AttrVec Attrs;
       Record.readAttributes(Attrs);

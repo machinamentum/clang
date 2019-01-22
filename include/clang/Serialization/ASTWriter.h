@@ -1,9 +1,8 @@
 //===- ASTWriter.h - AST File Writer ----------------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -19,16 +18,17 @@
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclarationName.h"
 #include "clang/AST/NestedNameSpecifier.h"
+#include "clang/AST/OpenMPClause.h"
 #include "clang/AST/TemplateBase.h"
 #include "clang/AST/TemplateName.h"
 #include "clang/AST/Type.h"
 #include "clang/AST/TypeLoc.h"
 #include "clang/Basic/LLVM.h"
 #include "clang/Basic/SourceLocation.h"
-#include "clang/Frontend/PCHContainerOperations.h"
 #include "clang/Sema/SemaConsumer.h"
 #include "clang/Serialization/ASTBitCodes.h"
 #include "clang/Serialization/ASTDeserializationListener.h"
+#include "clang/Serialization/PCHContainerOperations.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -955,6 +955,9 @@ public:
     return Writer->AddVersionTuple(Version, *Record);
   }
 
+  // Emit an attribute.
+  void AddAttr(const Attr *A);
+
   /// Emit a list of attributes.
   void AddAttributes(ArrayRef<const Attr*> Attrs);
 };
@@ -988,6 +991,18 @@ public:
   ASTMutationListener *GetASTMutationListener() override;
   ASTDeserializationListener *GetASTDeserializationListener() override;
   bool hasEmittedPCH() const { return Buffer->IsComplete; }
+};
+
+class OMPClauseWriter : public OMPClauseVisitor<OMPClauseWriter> {
+  ASTRecordWriter &Record;
+
+public:
+  OMPClauseWriter(ASTRecordWriter &Record) : Record(Record) {}
+#define OPENMP_CLAUSE(Name, Class) void Visit##Class(Class *S);
+#include "clang/Basic/OpenMPKinds.def"
+  void writeClause(OMPClause *C);
+  void VisitOMPClauseWithPreInit(OMPClauseWithPreInit *C);
+  void VisitOMPClauseWithPostUpdate(OMPClauseWithPostUpdate *C);
 };
 
 } // namespace clang

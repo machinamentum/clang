@@ -1,13 +1,12 @@
 //===--- CloneDetection.cpp - Finds code clones in an AST -------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
-///  This file implements classes for searching and anlyzing source code clones.
+/// This file implements classes for searching and analyzing source code clones.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -523,8 +522,7 @@ void CloneConstraint::splitCloneGroups(
       Result.push_back(PotentialGroup);
     }
 
-    assert(std::all_of(Indexes.begin(), Indexes.end(),
-                       [](char c) { return c == 1; }));
+    assert(llvm::all_of(Indexes, [](char c) { return c == 1; }));
   }
   CloneGroups = Result;
 }
